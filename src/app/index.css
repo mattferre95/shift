@@ -1,0 +1,110 @@
+@import "tailwindcss";
+
+/* Fonts are bundled, not fetched: the app must render identically offline. */
+@font-face { font-family: "Manrope"; font-style: normal; font-weight: 400; font-display: block; src: url("/fonts/Manrope-400.woff2") format("woff2"); }
+@font-face { font-family: "Manrope"; font-style: normal; font-weight: 500; font-display: block; src: url("/fonts/Manrope-500.woff2") format("woff2"); }
+@font-face { font-family: "Manrope"; font-style: normal; font-weight: 600; font-display: block; src: url("/fonts/Manrope-600.woff2") format("woff2"); }
+@font-face { font-family: "Manrope"; font-style: normal; font-weight: 700; font-display: block; src: url("/fonts/Manrope-700.woff2") format("woff2"); }
+@font-face { font-family: "Manrope"; font-style: normal; font-weight: 800; font-display: block; src: url("/fonts/Manrope-800.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Mono"; font-style: normal; font-weight: 400; font-display: block; src: url("/fonts/IBMPlexMono-400.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Mono"; font-style: normal; font-weight: 500; font-display: block; src: url("/fonts/IBMPlexMono-500.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Mono"; font-style: normal; font-weight: 600; font-display: block; src: url("/fonts/IBMPlexMono-600.woff2") format("woff2"); }
+
+/* ---------------------------------------------------------------------------
+   Tokens transcribed verbatim from the approved SHIFT design.
+   Do not invent new values here — see docs/DESIGN_SPEC.md.
+--------------------------------------------------------------------------- */
+@theme {
+  --color-shift-window:    oklch(0.16 0.004 195);
+  --color-shift-surface:   oklch(0.19 0.005 195);
+  --color-shift-chip:      oklch(0.20 0.005 195);
+  --color-shift-chip-hi:   oklch(0.24 0.008 195);
+  --color-shift-track:     oklch(0.22 0.006 195);
+  --color-shift-input:     oklch(0.13 0.003 195);
+
+  --color-shift-text:      oklch(0.96 0.003 195);
+  --color-shift-title:     oklch(0.94 0.003 195);
+  --color-shift-body:      oklch(0.90 0.004 195);
+  --color-shift-dim:       oklch(0.62 0.01 195);
+  --color-shift-muted:     oklch(0.55 0.01 195);
+  --color-shift-soft:      oklch(0.52 0.01 195);
+  --color-shift-quiet:     oklch(0.50 0.01 195);
+  --color-shift-label:     oklch(0.45 0.01 195);
+  --color-shift-faint:     oklch(0.42 0.008 195);
+  --color-shift-ghost:     oklch(0.40 0.008 195);
+
+  --color-shift-emerald:   oklch(0.72 0.15 155);
+  --color-shift-on-emerald: oklch(0.16 0.02 195);
+  --color-shift-danger:    oklch(0.75 0.13 35);
+
+  --font-sans: "Manrope", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+:root {
+  --hairline:        oklch(1 0 0 / 0.07);
+  --hairline-strong: oklch(1 0 0 / 0.10);
+  --hairline-faint:  oklch(1 0 0 / 0.06);
+  --emerald-tint:    oklch(0.72 0.15 155 / 0.14);
+  --emerald-edge:    oklch(0.72 0.15 155 / 0.50);
+  --emerald-veil:    oklch(0.72 0.15 155 / 0.20);
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--color-shift-window);
+  color: var(--color-shift-text);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  /* A desktop utility is not a web page: nothing is selectable by default. */
+  user-select: none;
+  cursor: default;
+}
+
+input, textarea { user-select: text; }
+
+/* The approved motion vocabulary: 120–220ms, opacity and small translation. */
+@keyframes shift-fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes shift-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.35; }
+}
+@keyframes shift-sweep {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(300%); }
+}
+
+.shift-enter { animation: shift-fade-in 180ms ease; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Scrollbars stay out of the way until they are needed. */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: oklch(1 0 0 / 0.09); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: oklch(1 0 0 / 0.16); }
+
+/* Focus is emerald and only ever shown for keyboard users. */
+:focus { outline: none; }
+:focus-visible {
+  outline: 2px solid var(--emerald-edge);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
