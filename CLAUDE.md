@@ -51,4 +51,14 @@ analytics, or cloud. Ideas for later go in the future-work section of
 
 ## Git
 
-No AI attribution trailers in commits or PRs.
+- All commits must be signed.
+- Conventional Commits only. Messages in English.
+- Commits must be atomic and self-contained.
+- Author and committer must always be `Matt Ferre <mattferre05@gmail.com>`.
+- NEVER use Claude, Anthropic, ChatGPT, Codex, OpenAI, or any other AI identity
+  as author, committer, co-author, or contributor.
+- NEVER add `Co-Authored-By` / `Co-authored-by`.
+- NEVER add `Generated-by` or any other AI attribution, in commits or PRs.
+- Before pushing, audit the history for unintended identities and attribution.
+- After publishing, verify GitHub's Contributors list holds only the intended
+  human contributors.
