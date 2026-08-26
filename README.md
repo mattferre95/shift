@@ -13,6 +13,10 @@
   compressing and transforming everyday media.
 </p>
 
+<p align="center">
+  <img src="docs/assets/shift-main.png" alt="SHIFT on macOS, waiting for a file or a link" width="860">
+</p>
+
 ## How it works
 
 ```
