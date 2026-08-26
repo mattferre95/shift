@@ -30,6 +30,14 @@ export function DetectedState() {
               <>
                 {formatDuration(media?.duration)} &nbsp;·&nbsp; {media?.domain}
               </>
+            ) : s.isImage ? (
+              [
+                resolutionLabel(local?.width ?? null, local?.height ?? null),
+                local?.ext,
+                formatBytes(local?.sizeBytes),
+              ]
+                .filter(Boolean)
+                .join("  ·  ")
             ) : (
               [
                 resolutionLabel(local?.width ?? null, local?.height ?? null),
@@ -89,6 +97,24 @@ export function DetectedState() {
             </div>
             {s.clipEnabled && <ClipControls showRange />}
           </div>
+        ) : s.isImage ? (
+          <Section title="COMPRESSION">
+            <div className="flex flex-wrap gap-2">
+              {s.compressionChoices.map((c) => (
+                <Chip
+                  key={c.id}
+                  label={c.label}
+                  selected={s.compression === c.id}
+                  onClick={() => s.setCompression(c.id)}
+                />
+              ))}
+            </div>
+            {s.format === "PNG" && (
+              <div className="mt-[10px] text-[11px] text-shift-ghost">
+                PNG is lossless — Optimize only recompresses, it never changes the image.
+              </div>
+            )}
+          </Section>
         ) : (
           <Section title="TRANSFORM">
             <div className="flex flex-wrap gap-2">

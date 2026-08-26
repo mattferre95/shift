@@ -19,6 +19,9 @@ pub enum OutputFormat {
     Wav,
     M4a,
     Aac,
+    Jpg,
+    Png,
+    Webp,
 }
 
 impl OutputFormat {
@@ -31,6 +34,9 @@ impl OutputFormat {
             OutputFormat::Wav => "wav",
             OutputFormat::M4a => "m4a",
             OutputFormat::Aac => "aac",
+            OutputFormat::Jpg => "jpg",
+            OutputFormat::Png => "png",
+            OutputFormat::Webp => "webp",
         }
     }
 
@@ -43,12 +49,24 @@ impl OutputFormat {
             OutputFormat::Wav => "WAV",
             OutputFormat::M4a => "M4A",
             OutputFormat::Aac => "AAC",
+            OutputFormat::Jpg => "JPG",
+            OutputFormat::Png => "PNG",
+            OutputFormat::Webp => "WEBP",
         }
     }
 
     pub fn is_audio_only(self) -> bool {
         matches!(self, OutputFormat::Mp3 | OutputFormat::Wav | OutputFormat::M4a | OutputFormat::Aac)
     }
+
+    pub fn is_image(self) -> bool {
+        matches!(self, OutputFormat::Jpg | OutputFormat::Png | OutputFormat::Webp)
+    }
+}
+
+/// Output chips for an image source (V1.1). HEIC is an input, not an output.
+pub fn image_options() -> Vec<OutputFormat> {
+    vec![OutputFormat::Jpg, OutputFormat::Png, OutputFormat::Webp]
 }
 
 /// Which output chips make sense for a probed local file (LOC-03/04/05).
@@ -89,6 +107,8 @@ fn audio_codec_fits(container: OutputFormat, codec: &str) -> bool {
         OutputFormat::Mp3 => c == "mp3",
         OutputFormat::Aac => c == "aac",
         OutputFormat::Wav => c.starts_with("pcm_"),
+        // Image containers never carry an audio stream.
+        OutputFormat::Jpg | OutputFormat::Png | OutputFormat::Webp => false,
     }
 }
 
@@ -113,6 +133,10 @@ pub fn build_plan(
     clip: Option<ClipRange>,
     output: &Path,
 ) -> Result<EncodePlan> {
+    if format.is_image() {
+        return Err(ShiftError::new("image_from_av", "That output is an image format.")
+            .hint("Choose a video or audio format for this file."));
+    }
     if format.is_audio_only() && probe.audio.is_none() {
         return Err(ShiftError::new("no_audio", "This file has no audio to extract.")
             .hint("Choose a video output format instead."));

@@ -27,7 +27,15 @@ export function CompleteState() {
         {output?.filename}
       </div>
       <div className="font-mono text-[12px] text-shift-quiet">
-        {formatBytes(output?.sizeBytes ?? null)}
+        {output?.sourceBytes != null ? (
+          <>
+            {formatBytes(output.sourceBytes)}
+            <span className="mx-[6px] text-shift-ghost">→</span>
+            {formatBytes(output.sizeBytes)}
+          </>
+        ) : (
+          formatBytes(output?.sizeBytes ?? null)
+        )}
       </div>
 
       <div className="mt-[10px] flex items-center gap-[18px]">

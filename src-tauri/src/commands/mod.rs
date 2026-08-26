@@ -6,6 +6,7 @@
 use crate::errors::{Result, ShiftError};
 use crate::filesystem;
 use crate::jobs::{self, ExportRequest, JobRegistry};
+use crate::media::image;
 use crate::media::{ffprobe::probe, profiles};
 use crate::process::CancelToken;
 use crate::providers::{self, UrlMedia};
@@ -21,6 +22,8 @@ const AUDIO_EXTS: [&str; 4] = ["mp3", "wav", "m4a", "aac"];
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalMedia {
+    /// "video" | "audio" | "image". Decides which interface the UI shows.
+    pub kind: &'static str,
     pub path: String,
     pub name: String,
     /// Uppercase source extension, shown in the file badge.
@@ -59,14 +62,36 @@ pub async fn analyze_file(path: String) -> Result<LocalMedia> {
             .extension()
             .map(|e| e.to_string_lossy().to_ascii_lowercase())
             .unwrap_or_default();
+        let cancel = CancelToken::new();
+
+        // Images take the sips path; audio and video keep the ffprobe one.
+        if image::is_image_ext(&ext) {
+            let info = image::probe(&resolved, &cancel)?;
+            return Ok(LocalMedia {
+                kind: "image",
+                path: resolved.to_string_lossy().to_string(),
+                name: resolved
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default(),
+                ext: ext.to_uppercase(),
+                size_bytes: info.size_bytes,
+                duration: None,
+                width: Some(info.width),
+                height: Some(info.height),
+                has_video: false,
+                outputs: profiles::image_options().iter().map(|f| f.label().to_string()).collect(),
+            });
+        }
+
         if !VIDEO_EXTS.contains(&ext.as_str()) && !AUDIO_EXTS.contains(&ext.as_str()) {
             return Err(ShiftError::unsupported_file());
         }
 
-        let cancel = CancelToken::new();
         let info = probe(&resolved, &cancel)?;
 
         Ok(LocalMedia {
+            kind: if info.has_video() { "video" } else { "audio" },
             path: resolved.to_string_lossy().to_string(),
             name: resolved.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
             ext: ext.to_uppercase(),

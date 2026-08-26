@@ -19,7 +19,9 @@ import {
 import * as ipc from "@/lib/ipc";
 import { formatTimestamp } from "@/lib/format";
 import {
+  compressionOptions,
   isAudioFormat,
+  type Compression,
   type ExportRequest,
   type Health,
   type JobEvent,
@@ -58,6 +60,7 @@ interface ShiftState {
   clipOut: string;
   clipError: string | null;
   clipLabel: string | null;
+  compression: Compression;
   job: Job | null;
   output: JobOutput | null;
   error: ShiftError | null;
@@ -74,6 +77,9 @@ interface ShiftApi extends ShiftState {
   canExport: boolean;
   /** Local video only: MP3/WAV selected means "extract the audio". */
   extractAudio: boolean;
+  isImage: boolean;
+  compressionChoices: { id: Compression; label: string }[];
+  setCompression: (c: Compression) => void;
   submitUrl: (raw: string) => void;
   openFilePicker: () => void;
   acceptPaths: (paths: string[]) => void;
@@ -103,6 +109,7 @@ const initial: ShiftState = {
   clipOut: "00:10.000",
   clipError: null,
   clipLabel: null,
+  compression: "none",
   job: null,
   output: null,
   error: null,
@@ -217,7 +224,8 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
       ipc
         .analyzeFile(path)
         .then((media) => {
-          const defaultOut: OutputFormat = media.hasVideo ? "MP4" : "MP3";
+          const defaultOut: OutputFormat =
+            media.kind === "image" ? "JPG" : media.hasVideo ? "MP4" : "MP3";
           set((prev) => ({
             ...prev,
             screen: "local",
@@ -225,6 +233,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
             localMedia: media,
             urlMedia: null,
             format: media.outputs.includes(defaultOut) ? defaultOut : media.outputs[0],
+            compression: "none",
             clipEnabled: false,
             clipIn: "00:00.000",
             clipOut: formatTimestamp(Math.min(10, media.duration ?? 10)),
@@ -253,7 +262,14 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
       multiple: false,
       directory: false,
       filters: [
-        { name: "Media", extensions: ["mp4", "mov", "webm", "mp3", "wav", "m4a", "aac"] },
+        {
+          name: "Media",
+          extensions: [
+            "mp4", "mov", "webm",
+            "mp3", "wav", "m4a", "aac",
+            "heic", "heif", "jpg", "jpeg", "png", "webp",
+          ],
+        },
       ],
     });
     if (typeof picked === "string") acceptFile(picked);
@@ -274,6 +290,8 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
     s.screen === "url" && !isAudioFormat(s.format) && (s.urlMedia?.qualities.length ?? 0) > 1;
 
   const extractAudio = s.screen === "local" && !!s.localMedia?.hasVideo && isAudioFormat(s.format);
+  const isImage = s.localMedia?.kind === "image";
+  const compressionChoices = compressionOptions(s.format);
 
   // ---- clip ---------------------------------------------------------------
   useEffect(() => {
@@ -307,8 +325,9 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
     const request: ExportRequest = {
       input,
       format: s.format,
-      clip: s.clipEnabled ? { start: s.clipIn, end: s.clipOut } : null,
+      clip: s.clipEnabled && !isImage ? { start: s.clipIn, end: s.clipOut } : null,
       outputDir: s.outputDir || null,
+      compression: isImage ? s.compression : null,
     };
     patch({ screen: "processing", error: null, output: null });
     ipc
@@ -317,7 +336,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
         jobRef.current = id;
       })
       .catch((e) => patch({ screen: "error", error: ipc.toShiftError(e) }));
-  }, [canExport, s.urlMedia, s.localMedia, s.quality, s.format, s.clipEnabled, s.clipIn, s.clipOut, s.outputDir, patch]);
+  }, [canExport, s.urlMedia, s.localMedia, s.quality, s.format, s.clipEnabled, s.clipIn, s.clipOut, s.outputDir, s.compression, isImage, patch]);
 
   const cancel = useCallback(() => {
     const id = s.job?.id ?? jobRef.current;
@@ -361,11 +380,24 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
     duration,
     canExport,
     extractAudio,
+    isImage,
+    compressionChoices,
     submitUrl,
     openFilePicker,
     acceptPaths,
     setDragging: (v) => patch({ dragging: v }),
-    setFormat: (f) => patch({ format: f }),
+    setFormat: (f) =>
+      set((prev) => {
+        // The compression ladder differs per format; drop a level the new
+        // format does not offer rather than silently sending it.
+        const allowed = compressionOptions(f).map((o) => o.id);
+        return {
+          ...prev,
+          format: f,
+          compression: allowed.includes(prev.compression) ? prev.compression : "none",
+        };
+      }),
+    setCompression: (c) => patch({ compression: c }),
     setQuality: (q) => patch({ quality: q }),
     toggleClip: () => set((prev) => ({ ...prev, clipEnabled: !prev.clipEnabled })),
     setClipIn: (v) => patch({ clipIn: v }),

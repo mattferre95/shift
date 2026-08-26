@@ -7,8 +7,9 @@
 
 use crate::errors::{Result, ShiftError};
 use crate::filesystem::{self, TempDir};
+use crate::media::image::{self, Compression};
 use crate::media::{ffmpeg, ffprobe, profiles::{self, OutputFormat}};
-use crate::process::CancelToken;
+use crate::process::{Binary, CancelToken};
 use crate::providers::{self, DownloadKind};
 use crate::settings::SettingsStore;
 use crate::validation::{self, ClipRange};
@@ -43,6 +44,8 @@ pub enum ActionSpec {
     Trim { start: f64, end: f64 },
     Convert { format: OutputFormat },
     ExtractAudio { format: OutputFormat },
+    ConvertImage { format: OutputFormat },
+    CompressImage { level: Compression },
 }
 
 // ------------------------------------------------------------------- request
@@ -69,6 +72,9 @@ pub struct ExportRequest {
     pub format: OutputFormat,
     pub clip: Option<ClipSpec>,
     pub output_dir: Option<String>,
+    /// Images only. Ignored by the audio/video pipeline.
+    #[serde(default)]
+    pub compression: Option<Compression>,
 }
 
 // --------------------------------------------------------------------- event
@@ -81,6 +87,9 @@ pub struct JobOutput {
     pub size_bytes: u64,
     /// True when every stream was copied rather than re-encoded.
     pub remuxed: bool,
+    /// Size of the input, when it was a local file, so the UI can show the
+    /// before/after of a compression.
+    pub source_bytes: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -251,6 +260,17 @@ fn output_stem(request: &ExportRequest, source_title: &str, clip: Option<ClipRan
         ),
         (InputSpec::Url { .. }, None) => base,
         (InputSpec::Local { .. }, Some(_)) => format!("{base}-trimmed"),
+        (InputSpec::Local { path }, None) if request.format.is_image() => {
+            let base = filesystem::sanitize_stem(source_title);
+            let suffix = request
+                .compression
+                .map(|c| image::name_suffix(c, request.format))
+                .unwrap_or(None);
+            match suffix {
+                Some(sfx) => format!("{base}{sfx}"),
+                None => base,
+            }
+        }
         (InputSpec::Local { path }, None) => {
             let source_ext = PathBuf::from(path)
                 .extension()
@@ -316,6 +336,16 @@ fn execute(
     };
 
     let temp = TempDir::create(job_id)?;
+
+    // Images are a different medium with a different toolchain, so they get
+    // their own short pipeline rather than being bent into the A/V one. Job
+    // ids, temp dirs, progress events, cancellation, naming and finalizing are
+    // all still the shared machinery below.
+    if let InputSpec::Local { path } = &request.input {
+        if request.format.is_image() || image_input(path) {
+            return execute_image(app, job_id, request, cancel, settings, slot, temp, &output_dir);
+        }
+    }
 
     // ---- Stage 1: understand the source -----------------------------------
     // Clip bounds can only be validated once the real duration is known, so the
@@ -446,9 +476,137 @@ fn execute(
         filename,
         size_bytes: size,
         remuxed: plan.remuxed,
+        source_bytes: None,
     });
 
     // `temp` drops here, removing the whole per-job directory.
+    Ok(())
+}
+
+/// True when the path looks like one of the V1.1 image inputs.
+fn image_input(path: &str) -> bool {
+    PathBuf::from(path)
+        .extension()
+        .map(|e| image::is_image_ext(&e.to_string_lossy()))
+        .unwrap_or(false)
+}
+
+/// The image pipeline: Analyze → Convert → (Compress) → Finalize.
+///
+/// Deliberately short. It reuses the job's temp directory, the collision-safe
+/// naming, the finalize-then-move rule and the same event stream as everything
+/// else — only the tools in the middle differ.
+#[allow(clippy::too_many_arguments)]
+fn execute_image(
+    app: &AppHandle,
+    job_id: &str,
+    request: &ExportRequest,
+    cancel: &Arc<CancelToken>,
+    settings: &SettingsStore,
+    slot: &mut Option<Reporter>,
+    temp: TempDir,
+    output_dir: &std::path::Path,
+) -> Result<()> {
+    let InputSpec::Local { path } = &request.input else {
+        return Err(ShiftError::new("no_image_url", "SHIFT can't fetch images from a link yet.")
+            .hint("Drop the image in instead."));
+    };
+
+    let resolved = validation::validate_input_path(path)?;
+    let probe = image::probe(&resolved, cancel)?;
+    let compression = request.compression.unwrap_or(Compression::None);
+
+    let stem_source = resolved
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "image".into());
+    let stem = output_stem(request, &stem_source, None);
+    let destination = filesystem::unique_path(output_dir, &stem, request.format.ext());
+
+    let work_dir = temp.sub("out")?;
+    let temp_output = work_dir.join(format!("output.{}", request.format.ext()));
+    let plan = image::build_plan(
+        &resolved,
+        &probe.format,
+        request.format,
+        compression,
+        &work_dir,
+        &temp_output,
+    )?;
+
+    // The stage list mirrors the plan: a second pass only appears when one is
+    // genuinely run.
+    let mut actions = vec![ActionSpec::Analyze, ActionSpec::ConvertImage { format: request.format }];
+    let mut stages: Vec<String> = vec!["Reading image…".into(), "Converting…".into()];
+    if plan.steps.len() > 1 {
+        actions.push(ActionSpec::CompressImage { level: compression });
+        stages.push(if plan.lossless { "Optimizing…".into() } else { "Compressing…".into() });
+    }
+    stages.push("Finalizing…".into());
+
+    *slot = Some(Reporter {
+        app: app.clone(),
+        job_id: job_id.to_string(),
+        stages,
+        actions,
+        index: 0,
+        filename: destination
+            .file_name()
+            .map(|f| f.to_string_lossy().to_string())
+            .unwrap_or_default(),
+    });
+    let reporter = slot.as_mut().expect("reporter was just installed");
+    reporter.advance(JobState::Analyzing);
+
+    // ---- run the passes ----------------------------------------------------
+    for (i, step) in plan.steps.iter().enumerate() {
+        if cancel.is_cancelled() {
+            return Err(ShiftError::cancelled());
+        }
+        reporter.index = i + 1;
+        reporter.advance(JobState::Processing);
+
+        // Neither tool reports a usable percentage for a single still image,
+        // and both finish in well under a second, so the UI shows stage
+        // position rather than a number nobody measured.
+        let (binary, args) = match step {
+            image::ImageStep::Sips(args) => (Binary::Sips, args),
+            image::ImageStep::Ffmpeg(args) => (Binary::Ffmpeg, args),
+        };
+        let out = crate::process::run_capture(binary, args, cancel)?;
+        if !out.success {
+            return Err(ShiftError::new("image_failed", "SHIFT couldn't convert this image.")
+                .hint("The file may be damaged or in an unexpected format.")
+                .technical(out.log()));
+        }
+    }
+
+    // ---- land it -----------------------------------------------------------
+    reporter.index = reporter.stages.len().saturating_sub(1);
+    reporter.advance(JobState::Finalizing);
+    if cancel.is_cancelled() {
+        return Err(ShiftError::cancelled());
+    }
+
+    let destination = if destination.exists() {
+        filesystem::unique_path(output_dir, &stem, request.format.ext())
+    } else {
+        destination
+    };
+    let size = filesystem::finalize(&temp_output, &destination)?;
+    settings.set_output_dir(&output_dir.to_string_lossy());
+
+    reporter.finish(JobOutput {
+        path: destination.to_string_lossy().to_string(),
+        filename: destination
+            .file_name()
+            .map(|f| f.to_string_lossy().to_string())
+            .unwrap_or_default(),
+        size_bytes: size,
+        remuxed: false,
+        source_bytes: Some(probe.size_bytes),
+    });
+
     Ok(())
 }
 

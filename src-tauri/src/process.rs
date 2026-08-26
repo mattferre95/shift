@@ -29,6 +29,9 @@ pub enum Binary {
     Ffmpeg,
     Ffprobe,
     YtDlp,
+    /// macOS' own image tool. Part of the OS, so it is never bundled — it is
+    /// the reason SHIFT can read HEIC without shipping another decoder.
+    Sips,
 }
 
 impl Binary {
@@ -37,6 +40,7 @@ impl Binary {
             Binary::Ffmpeg => "ffmpeg",
             Binary::Ffprobe => "ffprobe",
             Binary::YtDlp => "yt-dlp",
+            Binary::Sips => "sips",
         }
     }
 }
@@ -62,6 +66,15 @@ pub fn resolve(bin: Binary) -> Result<PathBuf> {
         }
     }
     roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("binaries")); // dev checkout
+
+    // sips ships with macOS; there is no bundled copy to look for.
+    if bin == Binary::Sips {
+        let system = PathBuf::from("/usr/bin/sips");
+        if system.is_file() {
+            return Ok(system);
+        }
+        return which_on_path("sips").ok_or_else(|| ShiftError::missing_binary("sips"));
+    }
 
     let relatives: Vec<String> = match bin {
         // yt-dlp ships as a directory build; see scripts/fetch-sidecars.sh for
