@@ -44,10 +44,13 @@ Both look like "the app hangs with no child process in `ps`":
 
 ## Scope
 
-V1 is frozen: URL → MP4/MP3/WAV with optional clipping, and local
-convert/extract/trim. No images, compression, batch, presets, history, accounts,
-analytics, or cloud. Ideas for later go in the future-work section of
-`docs/ARCHITECTURE.md`, not into the app.
+Supported today: URL download with optional clipping, exporting MP4/MP3/WAV;
+local video/audio conversion, trimming and audio extraction; and image
+conversion from HEIC/HEIF/JPG/PNG/WEBP to JPG/PNG/WEBP with optional
+compression. Every export is named and placed through the native Save panel.
+
+Still out: batch, presets, history, accounts, analytics, cloud. Ideas for later
+go in the future-work section of `docs/ARCHITECTURE.md`, not into the app.
 
 ## Git
 
