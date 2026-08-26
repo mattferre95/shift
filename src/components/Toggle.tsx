@@ -20,7 +20,7 @@ export function Toggle({
         "transition-all duration-[140ms] ease-out",
         on
           ? "border-[var(--emerald-edge)] bg-[var(--emerald-veil)]"
-          : "border-[oklch(1_0_0_/_0.12)] bg-shift-track",
+          : "border-[var(--hairline-strong)] bg-shift-track",
       ].join(" ")}
     >
       <span

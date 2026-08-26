@@ -26,7 +26,7 @@ export function CompleteState() {
       <div className="max-w-[600px] truncate px-4 font-mono text-[14px] text-shift-body">
         {output?.filename}
       </div>
-      <div className="font-mono text-[12px] text-[oklch(0.48_0.01_195)]">
+      <div className="font-mono text-[12px] text-shift-quiet">
         {formatBytes(output?.sizeBytes ?? null)}
       </div>
 

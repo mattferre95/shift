@@ -1,1 +1,0 @@
-{"default":{"identifier":"default","description":"Minimum surface required by the SHIFT main window.","local":true,"windows":["main"],"permissions":["core:default","core:window:allow-start-dragging","core:event:default","dialog:allow-open","dialog:allow-save","opener:allow-reveal-item-in-dir","opener:allow-open-path"]}}

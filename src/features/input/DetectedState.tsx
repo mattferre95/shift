@@ -54,7 +54,7 @@ export function DetectedState() {
         </button>
       </div>
 
-      <div className="my-[22px] h-px bg-[var(--hairline)]" />
+      <div className="my-[22px] h-px bg-[var(--hairline-faint)]" />
 
       {/* ---- actions ------------------------------------------------------ */}
       <div className="flex flex-col gap-[22px] overflow-y-auto">
@@ -174,7 +174,7 @@ function Thumbnail() {
 function FileBadge({ ext }: { ext: string }) {
   return (
     <div className="flex h-[58px] w-[58px] shrink-0 items-center justify-center rounded-[9px] bg-shift-track">
-      <span className="font-mono text-[12px] font-semibold text-[oklch(0.65_0.008_195)]">
+      <span className="font-mono text-[12px] font-semibold text-shift-dim">
         {ext}
       </span>
     </div>
@@ -201,7 +201,7 @@ function ClipControls({ showRange }: { showRange?: boolean }) {
         <TimeField label="OUT" value={s.clipOut} onChange={s.setClipOut} invalid={!!s.clipError} />
         <div className="mt-[19px] font-mono text-[12px] text-shift-faint">
           {s.clipError ? (
-            <span className="text-[oklch(0.75_0.13_35)]">{s.clipError}</span>
+            <span className="text-shift-danger">{s.clipError}</span>
           ) : (
             s.clipLabel && `${s.clipLabel} selected`
           )}

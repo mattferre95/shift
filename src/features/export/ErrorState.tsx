@@ -51,7 +51,7 @@ export function ErrorState() {
       </div>
 
       {open && error?.technical && (
-        <pre className="mt-1 max-h-[190px] w-[420px] shrink-0 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-[oklch(1_0_0_/_0.08)] bg-shift-input px-4 py-[14px] font-mono text-[11px] leading-[1.7] text-shift-quiet">
+        <pre className="mt-1 max-h-[190px] w-[420px] shrink-0 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-[var(--hairline)] bg-shift-input px-4 py-[14px] font-mono text-[11px] leading-[1.7] text-shift-quiet">
           {`error: ${error.code}\n${error.technical}`}
         </pre>
       )}

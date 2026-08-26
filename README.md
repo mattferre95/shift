@@ -2,9 +2,8 @@
 
 **Anything in. Anything out.**
 
-A premium, local-first Mac utility for downloading, clipping, converting,
-trimming and extracting media — without bouncing between single-purpose
-websites.
+A local-first macOS media utility for downloading, clipping, converting,
+extracting audio, and trimming local video and audio.
 
 Drop a file or paste a link, choose what you want out, export.
 
@@ -17,14 +16,17 @@ Drop a file or paste a link, choose what you want out, export.
 - Every job is cancellable, every failure is readable, and nothing is ever
   silently overwritten.
 
-Local files stay on your Mac. No accounts, no telemetry, no cloud.
+Local file processing happens on-device: SHIFT runs FFmpeg against the file
+where it already is and never uploads it. Only URL analysis and download reach
+the network. No accounts, no telemetry, no cloud.
 
 Downloading from a URL is for media you are authorized or legally permitted to
 download.
 
 ## Build
 
-Requires Node, Rust, and Xcode command line tools.
+Built and run on macOS (Apple Silicon). Requires Node, Rust, and the Xcode
+command line tools.
 
 ```bash
 npm install
@@ -32,16 +34,22 @@ npm run sidecars
 npm run app:build
 ```
 
-The result is `src-tauri/target/release/bundle/macos/SHIFT.app`.
+`npm run sidecars` downloads FFmpeg, ffprobe and yt-dlp into
+`src-tauri/binaries/`; they are not committed, and it is required before the
+first build. The result is
+`src-tauri/target/release/bundle/macos/SHIFT.app`, which runs from
+`/Applications` as an ad-hoc signed build.
 
 For development: `npm run app:dev`.
+
+Tests: `cd src-tauri && cargo test` (the network-dependent URL tests are
+`#[ignore]`d by default).
 
 ## Documentation
 
 `docs/ARCHITECTURE.md` · `docs/DESIGN_SPEC.md` · `docs/QA_CHECKLIST.md`
 
-## Licensing
+## Note
 
-SHIFT bundles FFmpeg builds that include libx264 and libvpx and are therefore
-**GPL-licensed**. Review `docs/ARCHITECTURE.md` § Packaging before any public or
-commercial distribution.
+SHIFT bundles GPL-licensed FFmpeg builds (libx264 / libvpx). That is fine for
+personal use; see `docs/ARCHITECTURE.md` if that ever changes.

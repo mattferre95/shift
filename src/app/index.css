@@ -11,27 +11,38 @@
 @font-face { font-family: "IBM Plex Mono"; font-style: normal; font-weight: 600; font-display: block; src: url("/fonts/IBMPlexMono-600.woff2") format("woff2"); }
 
 /* ---------------------------------------------------------------------------
-   Tokens transcribed verbatim from the approved SHIFT design.
-   Do not invent new values here — see docs/DESIGN_SPEC.md.
+   Tokens.
+
+   The scale is anchored on five values and everything else is a ramp between
+   them, so the interface reads as one surface rather than a stack of cards:
+
+     #080A09  window      #0D100F  elevated      #232826  border
+     #F1F3F2  primary     #717874  secondary
+
+   Neutrals sit at hue 165, a touch warmer than the emerald accent at 155, so
+   the greys stay related to the brand colour without ever looking green.
+   See docs/DESIGN_SPEC.md before adding a value that is not here.
 --------------------------------------------------------------------------- */
 @theme {
-  --color-shift-window:    oklch(0.16 0.004 195);
-  --color-shift-surface:   oklch(0.19 0.005 195);
-  --color-shift-chip:      oklch(0.20 0.005 195);
-  --color-shift-chip-hi:   oklch(0.24 0.008 195);
-  --color-shift-track:     oklch(0.22 0.006 195);
-  --color-shift-input:     oklch(0.13 0.003 195);
+  /* Surfaces, darkest first. */
+  --color-shift-window:    oklch(0.142 0.004 165);  /* #080A09 */
+  --color-shift-input:     oklch(0.126 0.004 165);  /* recessed fields  */
+  --color-shift-surface:   oklch(0.169 0.005 165);  /* #0D100F          */
+  --color-shift-chip:      oklch(0.185 0.006 165);
+  --color-shift-chip-hi:   oklch(0.213 0.007 165);
+  --color-shift-track:     oklch(0.205 0.006 165);
 
-  --color-shift-text:      oklch(0.96 0.003 195);
-  --color-shift-title:     oklch(0.94 0.003 195);
-  --color-shift-body:      oklch(0.90 0.004 195);
-  --color-shift-dim:       oklch(0.62 0.01 195);
-  --color-shift-muted:     oklch(0.55 0.01 195);
-  --color-shift-soft:      oklch(0.52 0.01 195);
-  --color-shift-quiet:     oklch(0.50 0.01 195);
-  --color-shift-label:     oklch(0.45 0.01 195);
-  --color-shift-faint:     oklch(0.42 0.008 195);
-  --color-shift-ghost:     oklch(0.40 0.008 195);
+  /* Text, brightest first. */
+  --color-shift-text:      oklch(0.962 0.003 165);  /* #F1F3F2 */
+  --color-shift-title:     oklch(0.945 0.003 165);
+  --color-shift-body:      oklch(0.880 0.004 165);
+  --color-shift-dim:       oklch(0.680 0.009 165);
+  --color-shift-muted:     oklch(0.566 0.010 165);  /* #717874 */
+  --color-shift-soft:      oklch(0.520 0.010 165);
+  --color-shift-quiet:     oklch(0.478 0.009 165);
+  --color-shift-label:     oklch(0.430 0.008 165);
+  --color-shift-faint:     oklch(0.375 0.007 165);
+  --color-shift-ghost:     oklch(0.335 0.006 165);
 
   --color-shift-emerald:   oklch(0.72 0.15 155);
   --color-shift-on-emerald: oklch(0.16 0.02 195);
@@ -42,12 +53,15 @@
 }
 
 :root {
-  --hairline:        oklch(1 0 0 / 0.07);
-  --hairline-strong: oklch(1 0 0 / 0.10);
-  --hairline-faint:  oklch(1 0 0 / 0.06);
-  --emerald-tint:    oklch(0.72 0.15 155 / 0.14);
-  --emerald-edge:    oklch(0.72 0.15 155 / 0.50);
-  --emerald-veil:    oklch(0.72 0.15 155 / 0.20);
+  /* Borders are opaque greys, not white at low alpha — alpha over an almost
+     black ground washes out and reads as a web card outline. */
+  --hairline-faint:  oklch(0.198 0.005 165);  /* titlebar separator */
+  --hairline:        oklch(0.225 0.006 165);  /* section rules      */
+  --hairline-strong: oklch(0.271 0.008 165);  /* #232826, controls  */
+
+  --emerald-tint:    oklch(0.72 0.15 155 / 0.12);
+  --emerald-edge:    oklch(0.72 0.15 155 / 0.45);
+  --emerald-veil:    oklch(0.72 0.15 155 / 0.18);
 }
 
 * { box-sizing: border-box; }

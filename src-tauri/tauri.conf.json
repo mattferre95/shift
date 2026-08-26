@@ -22,7 +22,7 @@
         "center": true,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
-        "backgroundColor": "#0b0e0e",
+        "backgroundColor": "#080A09",
         "dragDropEnabled": true
       }
     ],

@@ -49,7 +49,7 @@ export function ProcessingState() {
                 ? "bg-[oklch(0.72_0.15_155_/_0.5)]"
                 : i === index
                   ? "animate-[shift-pulse_1.1s_ease-in-out_infinite] bg-shift-emerald"
-                  : "bg-[oklch(1_0_0_/_0.12)]",
+                  : "bg-[var(--hairline-strong)]",
             ].join(" ")}
           />
         ))}

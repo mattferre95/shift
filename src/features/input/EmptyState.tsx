@@ -16,14 +16,14 @@ export function EmptyState() {
     : [];
 
   return (
-    <div className="shift-enter absolute inset-0 flex flex-col items-center justify-center gap-[26px] p-8">
+    <div className="shift-enter absolute inset-0 flex flex-col items-center justify-center px-8 pb-12 pt-8">
       <div className="flex flex-col items-center text-center">
-        <img src="/brand/shift-symbol.png" alt="" className="mb-3 h-auto w-10" />
-        <div className="text-[32px] font-extrabold tracking-[-0.02em] text-shift-text">
+        <img src="/brand/shift-symbol.png" alt="" className="mb-[10px] h-auto w-9" />
+        <div className="text-[29px] font-extrabold leading-none tracking-[-0.022em] text-shift-text">
           SHIFT
-          <span className="align-super text-[16px] font-semibold text-shift-dim">™</span>
+          <span className="align-super text-[14px] font-semibold text-shift-dim">™</span>
         </div>
-        <div className="mt-[6px] text-[14px] text-shift-dim">Anything in. Anything out.</div>
+        <div className="mt-[5px] text-[13px] text-shift-dim">Anything in. Anything out.</div>
       </div>
 
       <button
@@ -44,29 +44,29 @@ export function EmptyState() {
           else acceptPaths([]);
         }}
         className={[
-          "flex min-h-[190px] w-[560px] flex-col items-center justify-center gap-[10px]",
-          "rounded-xl border transition-all duration-[160ms] ease-out",
+          "mt-[22px] flex min-h-[156px] w-[540px] flex-col items-center justify-center gap-[7px]",
+          "rounded-[10px] border transition-all duration-[160ms] ease-out",
           dragging
-            ? "-translate-y-px border-[oklch(0.72_0.15_155_/_0.6)] bg-shift-chip-hi"
-            : "border-[var(--hairline-strong)] bg-shift-surface hover:bg-[oklch(0.205_0.006_195)]",
+            ? "border-[var(--emerald-edge)] bg-[var(--emerald-tint)]"
+            : "border-transparent bg-shift-surface hover:bg-shift-chip",
         ].join(" ")}
       >
-        <div className="text-[13px] font-semibold tracking-[0.06em] text-shift-body">
+        <div className="text-[12px] font-semibold tracking-[0.07em] text-shift-body">
           {analyzing ? "READING…" : "DROP A FILE OR PASTE A LINK"}
         </div>
-        <div className="text-[13px] text-shift-soft">Video, audio, or supported media URL</div>
+        <div className="text-[12px] text-shift-quiet">Video, audio, or supported media URL</div>
       </button>
 
       {healthError ? (
-        <div className="text-center text-[12px] text-[oklch(0.7_0.13_35)]">
+        <div className="mt-[20px] text-center text-[11px] text-shift-danger">
           SHIFT can't reach its media engine. {healthError}
         </div>
       ) : missing.length > 0 ? (
-        <div className="text-center text-[12px] text-[oklch(0.7_0.13_35)]">
+        <div className="mt-[20px] text-center text-[11px] text-shift-danger">
           Missing {missing.join(", ")}. Run scripts/fetch-sidecars.sh.
         </div>
       ) : (
-        <div className="text-center text-[12px] text-shift-faint">
+        <div className="mt-[20px] text-center text-[11px] text-shift-ghost">
           ⌘V to paste a link &nbsp;·&nbsp; Local files stay on your Mac.
         </div>
       )}
