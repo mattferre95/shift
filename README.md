@@ -1,32 +1,73 @@
-# SHIFT™
+<p align="center">
+  <img src="public/brand/shift-symbol.png" alt="" width="104">
+</p>
 
-**Anything in. Anything out.**
+<h1 align="center">SHIFT™</h1>
 
-A local-first macOS media utility for downloading, clipping, converting,
-extracting audio, and trimming local video and audio.
+<p align="center">
+  <strong>Anything in. Anything out.</strong>
+</p>
 
-Drop a file or paste a link, choose what you want out, export.
+<p align="center">
+  A local-first macOS media utility for downloading, clipping, converting,
+  compressing and transforming everyday media.
+</p>
+
+## How it works
+
+```
+Input → Detect → Choose output → Export
+```
+
+Drop a file or paste a link. SHIFT works out what it is and shows only the
+outputs that make sense for it — a photo never offers you a bitrate, an audio
+file never offers you a resolution. There is no dashboard of unrelated
+converters to navigate.
 
 ## What it does
 
-- Paste a supported media URL → inspect it → export **MP4**, **MP3** or **WAV**,
-  optionally clipped to an IN/OUT range.
-- Drop a local **MP4 / MOV / WEBM** or **MP3 / WAV / M4A / AAC** → convert,
-  trim, or extract its audio.
-- Every job is cancellable, every failure is readable, and nothing is ever
-  silently overwritten.
+### URL media
 
-Local file processing happens on-device: SHIFT runs FFmpeg against the file
-where it already is and never uploads it. Only URL analysis and download reach
-the network. No accounts, no telemetry, no cloud.
+- Paste any link yt-dlp supports
+- Read the title, thumbnail, duration and source before committing to anything
+- Export **MP4**, **MP3** or **WAV**
+- Optional **IN / OUT** clipping with millisecond precision
+- Quality selection where the source actually offers alternatives
 
-Downloading from a URL is for media you are authorized or legally permitted to
-download.
+### Local video and audio
 
-## Build
+- Read **MP4 · MOV · WEBM** and **MP3 · WAV · M4A · AAC**
+- Convert between compatible formats, copying streams untouched when possible
+- Trim to an exact range
+- Extract the audio from a video
 
-Built and run on macOS (Apple Silicon). Requires Node, Rust, and the Xcode
-command line tools.
+### Images
+
+- Read **HEIC · HEIF · JPG · JPEG · PNG · WEBP**
+- Export **JPG · PNG · WEBP**
+- Quality presets for the lossy formats — None, Light, Balanced, Strong
+- Lossless optimization for PNG, which never touches a pixel
+
+Every export is named and placed through the native macOS Save panel, so the
+file lands exactly where you put it. Long jobs show real progress and can be
+cancelled.
+
+## Privacy
+
+**Local files stay on your Mac.** Video, audio and image transformations run
+on-device. No accounts, no telemetry, no cloud uploads, no analytics.
+
+Analyzing and downloading a URL naturally requires network access. That path is
+intended for media you are authorized or legally permitted to download.
+
+## Built with
+
+Tauri 2 · React · TypeScript · Rust · FFmpeg and ffprobe · yt-dlp · native macOS
+image tooling
+
+## Build locally
+
+Requires Node, Rust and the Xcode command line tools.
 
 ```bash
 npm install
@@ -35,21 +76,24 @@ npm run app:build
 ```
 
 `npm run sidecars` downloads FFmpeg, ffprobe and yt-dlp into
-`src-tauri/binaries/`; they are not committed, and it is required before the
-first build. The result is
-`src-tauri/target/release/bundle/macos/SHIFT.app`, which runs from
-`/Applications` as an ad-hoc signed build.
+`src-tauri/binaries/`. They are deliberately not committed, and the step is
+required before the first build.
 
-For development: `npm run app:dev`.
+The result is `src-tauri/target/release/bundle/macos/SHIFT.app`.
 
-Tests: `cd src-tauri && cargo test` (the network-dependent URL tests are
-`#[ignore]`d by default).
+```bash
+npm run app:dev                 # development
+cd src-tauri && cargo test      # tests (network tests are #[ignore]d)
+```
 
-## Documentation
+## Project status
 
-`docs/ARCHITECTURE.md` · `docs/DESIGN_SPEC.md` · `docs/QA_CHECKLIST.md`
+SHIFT is built primarily as my personal everyday media utility. The repository
+is public because I like building tools in the open.
 
-## Note
+It is developed and tested on macOS running Apple Silicon. There are no signed
+or notarized releases, and no support commitment — build it yourself with the
+steps above.
 
-SHIFT bundles GPL-licensed FFmpeg builds (libx264 / libvpx). That is fine for
-personal use; see `docs/ARCHITECTURE.md` if that ever changes.
+Implementation notes live in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md),
+including the FFmpeg licensing position for the bundled builds.
