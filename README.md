@@ -95,5 +95,15 @@ It is developed and tested on macOS running Apple Silicon. There are no signed
 or notarized releases, and no support commitment — build it yourself with the
 steps above.
 
+## Support
+
+SHIFT™ started as a tool I wanted for myself and I share it publicly for others
+to use, explore and improve.
+
+If it saved you some time or you like what I'm building,
+[buy me a coffee](https://buymeacoffee.com/mattferre).
+
+---
+
 Implementation notes live in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md),
 including the FFmpeg licensing position for the bundled builds.
