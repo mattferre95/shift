@@ -24,11 +24,15 @@ function Window() {
     <div className="flex h-full flex-col bg-shift-window">
       <TitleBar />
       <main className="relative flex-1 overflow-hidden">
-        {screen === "empty" && <EmptyState />}
-        {(screen === "url" || screen === "local") && <DetectedState />}
-        {screen === "processing" && <ProcessingState />}
-        {screen === "complete" && <CompleteState />}
-        {screen === "error" && <ErrorState />}
+        {/* The utility stays compact: enlarging the window adds margin around
+            the content rather than stretching every row across it. */}
+        <div className="relative mx-auto h-full w-full max-w-[920px]">
+          {screen === "empty" && <EmptyState />}
+          {(screen === "url" || screen === "local") && <DetectedState />}
+          {screen === "processing" && <ProcessingState />}
+          {screen === "complete" && <CompleteState />}
+          {screen === "error" && <ErrorState />}
+        </div>
 
         {/* A file dragged anywhere over the window, not just the drop target. */}
         {dragging && screen !== "processing" && (

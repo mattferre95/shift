@@ -13,16 +13,16 @@
     "windows": [
       {
         "title": "SHIFT",
-        "width": 920,
+        "width": 980,
         "height": 680,
-        "minWidth": 820,
-        "minHeight": 600,
+        "minWidth": 780,
+        "minHeight": 560,
         "resizable": true,
         "fullscreen": false,
         "center": true,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
-        "backgroundColor": "#080A09",
+        "backgroundColor": "#060807",
         "dragDropEnabled": true
       }
     ],

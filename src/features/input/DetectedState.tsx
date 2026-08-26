@@ -17,7 +17,11 @@ export function DetectedState() {
 
   return (
     <div className="shift-enter absolute inset-0 flex flex-col px-8 py-7">
-      {/* ---- identity ---------------------------------------------------- */}
+      {/* Everything above Export is centred in the room it has, with a small
+          upward bias — true centring reads as slightly low. Export itself stays
+          pinned to the bottom. */}
+      <div className="flex min-h-0 flex-1 flex-col justify-center pb-[26px]">
+        {/* ---- identity -------------------------------------------------- */}
       <div className="flex items-start gap-[14px]">
         {isUrl ? <Thumbnail /> : <FileBadge ext={local?.ext ?? ""} />}
 
@@ -136,7 +140,7 @@ export function DetectedState() {
         )}
       </div>
 
-      <div className="flex-1" />
+      </div>
 
       {/* ---- export ------------------------------------------------------- */}
       <div className="mt-[18px] flex items-center justify-between gap-4">

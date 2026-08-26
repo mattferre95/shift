@@ -16,8 +16,8 @@
    The scale is anchored on five values and everything else is a ramp between
    them, so the interface reads as one surface rather than a stack of cards:
 
-     #080A09  window      #0D100F  elevated      #232826  border
-     #F1F3F2  primary     #717874  secondary
+     #060807  window      #0A0D0C  elevated      #1D211F  border
+     #F2F4F3  primary     #747B77  secondary
 
    Neutrals sit at hue 165, a touch warmer than the emerald accent at 155, so
    the greys stay related to the brand colour without ever looking green.
@@ -25,24 +25,24 @@
 --------------------------------------------------------------------------- */
 @theme {
   /* Surfaces, darkest first. */
-  --color-shift-window:    oklch(0.142 0.004 165);  /* #080A09 */
-  --color-shift-input:     oklch(0.126 0.004 165);  /* recessed fields  */
-  --color-shift-surface:   oklch(0.169 0.005 165);  /* #0D100F          */
-  --color-shift-chip:      oklch(0.185 0.006 165);
-  --color-shift-chip-hi:   oklch(0.213 0.007 165);
-  --color-shift-track:     oklch(0.205 0.006 165);
+  --color-shift-window:    oklch(0.131 0.005 165);  /* #060807 */
+  --color-shift-input:     oklch(0.116 0.004 165);  /* recessed fields  */
+  --color-shift-surface:   oklch(0.155 0.005 165);  /* #0A0D0C          */
+  --color-shift-chip:      oklch(0.172 0.006 165);
+  --color-shift-chip-hi:   oklch(0.199 0.007 165);
+  --color-shift-track:     oklch(0.192 0.006 165);
 
   /* Text, brightest first. */
-  --color-shift-text:      oklch(0.962 0.003 165);  /* #F1F3F2 */
-  --color-shift-title:     oklch(0.945 0.003 165);
+  --color-shift-text:      oklch(0.965 0.003 165);  /* #F2F4F3 */
+  --color-shift-title:     oklch(0.948 0.003 165);
   --color-shift-body:      oklch(0.880 0.004 165);
-  --color-shift-dim:       oklch(0.680 0.009 165);
-  --color-shift-muted:     oklch(0.566 0.010 165);  /* #717874 */
+  --color-shift-dim:       oklch(0.685 0.009 165);
+  --color-shift-muted:     oklch(0.576 0.010 165);  /* #747B77 */
   --color-shift-soft:      oklch(0.520 0.010 165);
-  --color-shift-quiet:     oklch(0.478 0.009 165);
-  --color-shift-label:     oklch(0.430 0.008 165);
-  --color-shift-faint:     oklch(0.375 0.007 165);
-  --color-shift-ghost:     oklch(0.335 0.006 165);
+  --color-shift-quiet:     oklch(0.470 0.009 165);
+  --color-shift-label:     oklch(0.418 0.008 165);
+  --color-shift-faint:     oklch(0.355 0.007 165);
+  --color-shift-ghost:     oklch(0.305 0.006 165);
 
   --color-shift-emerald:   oklch(0.72 0.15 155);
   --color-shift-on-emerald: oklch(0.16 0.02 195);
@@ -55,9 +55,12 @@
 :root {
   /* Borders are opaque greys, not white at low alpha — alpha over an almost
      black ground washes out and reads as a web card outline. */
-  --hairline-faint:  oklch(0.198 0.005 165);  /* titlebar separator */
-  --hairline:        oklch(0.225 0.006 165);  /* section rules      */
-  --hairline-strong: oklch(0.271 0.008 165);  /* #232826, controls  */
+  --hairline-faint:  oklch(0.176 0.005 165);  /* titlebar separator */
+  --hairline:        oklch(0.203 0.006 165);  /* section rules      */
+  --hairline-strong: oklch(0.243 0.007 165);  /* #1D211F, controls  */
+  /* A 1px catch of light along a control's top edge. Barely there; it is what
+     stops a filled rectangle from reading as a flat web div. */
+  --top-edge:        inset 0 1px 0 0 oklch(1 0 0 / 0.035);
 
   --emerald-tint:    oklch(0.72 0.15 155 / 0.12);
   --emerald-edge:    oklch(0.72 0.15 155 / 0.45);
@@ -72,7 +75,13 @@ html, body, #root {
 }
 
 body {
-  background: var(--color-shift-window);
+  background:
+    radial-gradient(
+      120% 90% at 50% 42%,
+      oklch(0.158 0.005 165) 0%,
+      var(--color-shift-window) 62%
+    ),
+    var(--color-shift-window);
   color: var(--color-shift-text);
   font-family: var(--font-sans);
   font-size: 13px;
@@ -97,6 +106,14 @@ input, textarea { user-select: text; }
 @keyframes shift-sweep {
   from { transform: translateX(-100%); }
   to   { transform: translateX(300%); }
+}
+
+/* The symbol leans a hair toward the drop target when a drag arrives. */
+.shift-symbol {
+  transition: transform 160ms ease-out, opacity 160ms ease-out;
+}
+.shift-symbol[data-dragging="true"] {
+  transform: translateY(2px);
 }
 
 .shift-enter { animation: shift-fade-in 180ms ease; }
