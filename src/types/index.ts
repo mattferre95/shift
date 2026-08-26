@@ -87,6 +87,8 @@ export interface JobOutput {
   remuxed: boolean;
   /** Size of the local input, when known, for the before/after line. */
   sourceBytes: number | null;
+  /** Home-abbreviated folder the file landed in. */
+  directory: string;
 }
 
 export interface JobEvent {
@@ -125,4 +127,11 @@ export interface ExportRequest {
   outputDir: string | null;
   /** Images only; ignored by the audio/video pipeline. */
   compression: Compression | null;
+  /** Full path chosen in the native Save panel. */
+  destinationPath: string | null;
+}
+
+export interface SavePrompt {
+  filename: string;
+  directory: string;
 }

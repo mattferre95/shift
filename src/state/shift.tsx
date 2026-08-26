@@ -89,8 +89,8 @@ interface ShiftApi extends ShiftState {
   toggleClip: () => void;
   setClipIn: (v: string) => void;
   setClipOut: (v: string) => void;
-  chooseOutputDir: () => void;
   startExport: () => void;
+  saving: boolean;
   cancel: () => void;
   reset: () => void;
   retry: () => void;
@@ -122,6 +122,8 @@ const Ctx = createContext<ShiftApi | null>(null);
 
 export function ShiftProvider({ children }: { children: ReactNode }) {
   const [s, set] = useState<ShiftState>(initial);
+  // True while the Save panel is open, so the action cannot be fired twice.
+  const [saving, setSaving] = useState(false);
   const patch = useCallback((p: Partial<ShiftState>) => set((prev) => ({ ...prev, ...p })), []);
 
   // The last thing the user handed us, so Try again can repeat it.
@@ -313,8 +315,12 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
     !s.analyzing && (s.screen === "url" || s.screen === "local") && (!s.clipEnabled || !s.clipError);
 
   // ---- actions ------------------------------------------------------------
-  const startExport = useCallback(() => {
-    if (!canExport) return;
+  /**
+   * Export… — the ellipsis is literal: this opens the native Save panel and
+   * nothing is processed until the user confirms it.
+   */
+  const startExport = useCallback(async () => {
+    if (!canExport || saving) return;
     const input: ExportRequest["input"] | null = s.urlMedia
       ? { kind: "url", url: s.urlMedia.url, quality: s.quality }
       : s.localMedia
@@ -328,15 +334,41 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
       clip: s.clipEnabled && !isImage ? { start: s.clipIn, end: s.clipOut } : null,
       outputDir: s.outputDir || null,
       compression: isImage ? s.compression : null,
+      destinationPath: null,
     };
-    patch({ screen: "processing", error: null, output: null });
-    ipc
-      .startExport(request)
-      .then((id) => {
-        jobRef.current = id;
-      })
-      .catch((e) => patch({ screen: "error", error: ipc.toShiftError(e) }));
-  }, [canExport, s.urlMedia, s.localMedia, s.quality, s.format, s.clipEnabled, s.clipIn, s.clipOut, s.outputDir, s.compression, isImage, patch]);
+
+    setSaving(true);
+    try {
+      // The backend owns the naming rules, so the panel is prefilled from it
+      // rather than from a second copy of them over here.
+      const sourceTitle = s.urlMedia?.title ?? s.localMedia?.name ?? "";
+      const prompt = await ipc.savePrompt(request, sourceTitle);
+
+      const { save } = await import("@tauri-apps/plugin-dialog");
+      const ext = s.format.toLowerCase();
+      const chosen = await save({
+        defaultPath: `${prompt.directory}/${prompt.filename}`,
+        // One extension, so the panel appends it and never becomes a second
+        // format selector.
+        filters: [{ name: s.format, extensions: [ext] }],
+      });
+
+      // Cancelled: no job, no temp directory, configuration left intact.
+      if (typeof chosen !== "string" || chosen.length === 0) return;
+
+      const directory = chosen.slice(0, chosen.lastIndexOf("/")) || prompt.directory;
+      // Remember the folder as soon as it is confirmed, not only on success.
+      const saved = await ipc.setOutputDir(directory).catch(() => directory);
+
+      patch({ screen: "processing", error: null, output: null, outputDir: saved });
+      const id = await ipc.startExport({ ...request, destinationPath: chosen });
+      jobRef.current = id;
+    } catch (e) {
+      patch({ screen: "error", error: ipc.toShiftError(e) });
+    } finally {
+      setSaving(false);
+    }
+  }, [canExport, saving, s.urlMedia, s.localMedia, s.quality, s.format, s.clipEnabled, s.clipIn, s.clipOut, s.outputDir, s.compression, isImage, patch]);
 
   const cancel = useCallback(() => {
     const id = s.job?.id ?? jobRef.current;
@@ -364,14 +396,6 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
     else acceptFile(last.value);
   }, [reset, submitUrl, acceptFile]);
 
-  const chooseOutputDir = useCallback(async () => {
-    const { open } = await import("@tauri-apps/plugin-dialog");
-    const picked = await open({ directory: true, multiple: false, defaultPath: s.outputDir });
-    if (typeof picked === "string") {
-      const saved = await ipc.setOutputDir(picked).catch(() => picked);
-      patch({ outputDir: saved });
-    }
-  }, [s.outputDir, patch]);
 
   const api: ShiftApi = {
     ...s,
@@ -379,6 +403,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
     showQuality,
     duration,
     canExport,
+    saving,
     extractAudio,
     isImage,
     compressionChoices,
@@ -402,8 +427,9 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
     toggleClip: () => set((prev) => ({ ...prev, clipEnabled: !prev.clipEnabled })),
     setClipIn: (v) => patch({ clipIn: v }),
     setClipOut: (v) => patch({ clipOut: v }),
-    chooseOutputDir,
-    startExport,
+    startExport: () => {
+      void startExport();
+    },
     cancel,
     reset,
     retry,

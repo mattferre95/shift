@@ -12,6 +12,7 @@ import type {
   Health,
   JobEvent,
   LocalMedia,
+  SavePrompt,
   UrlMedia,
 } from "@/types";
 
@@ -26,6 +27,10 @@ export const validateClip = (start: string, end: string, duration: number | null
 
 export const startExport = (request: ExportRequest) =>
   invoke<string>("start_export", { request });
+
+/** Filename and folder the native Save panel should open with. */
+export const savePrompt = (request: ExportRequest, sourceTitle: string) =>
+  invoke<SavePrompt>("save_prompt", { request, sourceTitle });
 
 export const cancelJob = (jobId: string) => invoke<boolean>("cancel_job", { jobId });
 

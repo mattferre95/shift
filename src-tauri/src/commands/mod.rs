@@ -130,6 +130,31 @@ pub fn start_export(app: AppHandle, request: ExportRequest) -> Result<String> {
     Ok(jobs::spawn(app, request))
 }
 
+/// What the Save panel should be prefilled with.
+///
+/// The naming rules live in the jobs layer and are not duplicated in the
+/// frontend; `source_title` is the title or filename the UI already has from
+/// analysis, so no source is re-fetched to answer this.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavePrompt {
+    pub filename: String,
+    /// Folder the panel should open in: last used, else Downloads.
+    pub directory: String,
+}
+
+#[tauri::command]
+pub fn save_prompt(
+    settings: State<'_, SettingsStore>,
+    request: ExportRequest,
+    source_title: String,
+) -> SavePrompt {
+    SavePrompt {
+        filename: jobs::suggested_filename(&request, &source_title),
+        directory: settings.default_output_dir().to_string_lossy().to_string(),
+    }
+}
+
 #[tauri::command]
 pub fn cancel_job(registry: State<'_, JobRegistry>, job_id: String) -> bool {
     registry.cancel(&job_id)

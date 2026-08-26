@@ -38,6 +38,15 @@ export function CompleteState() {
         )}
       </div>
 
+      {output?.directory && (
+        <div
+          title={output.path}
+          className="max-w-[520px] truncate font-mono text-[12px] text-shift-faint"
+        >
+          {output.directory}
+        </div>
+      )}
+
       <div className="mt-[10px] flex items-center gap-[18px]">
         <button
           type="button"

@@ -144,28 +144,22 @@ export function DetectedState() {
 
       {/* ---- export ------------------------------------------------------- */}
       <div className="mt-[18px] flex items-center justify-between gap-4">
-        <button
-          type="button"
-          onClick={s.chooseOutputDir}
-          title={s.outputDir}
-          className="min-w-0 truncate text-left text-[12px] text-shift-faint transition-colors duration-[140ms] hover:text-shift-muted"
-        >
-          Save to {s.outputDir.split("/").pop() || s.outputDir}
-        </button>
+        <div />
 
         <button
           type="button"
-          disabled={!s.canExport}
+          disabled={!s.canExport || s.saving}
           onClick={s.startExport}
           className={[
             "shrink-0 rounded-lg px-[26px] py-[11px] text-[13px] font-bold tracking-[0.04em]",
             "transition-opacity duration-[140ms]",
-            s.canExport
+            s.canExport && !s.saving
               ? "bg-shift-emerald text-shift-on-emerald hover:opacity-90"
               : "cursor-not-allowed bg-shift-emerald/40 text-shift-on-emerald/60",
           ].join(" ")}
         >
-          EXPORT
+          {/* The ellipsis is literal: this opens the native Save panel. */}
+          EXPORT…
         </button>
       </div>
 

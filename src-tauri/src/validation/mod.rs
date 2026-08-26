@@ -151,6 +151,77 @@ pub fn validate_output_dir(raw: &str) -> Result<PathBuf> {
     Ok(canonical)
 }
 
+/// Every extension SHIFT can produce. Used to decide whether a user-typed
+/// extension is one we may replace, or an ordinary part of their filename.
+const KNOWN_EXTS: [&str; 10] = [
+    "mp4", "mov", "webm", "mp3", "wav", "m4a", "aac", "jpg", "png", "webp",
+];
+
+/// Validate a destination chosen through the native Save panel and force its
+/// extension to match the requested output format.
+///
+/// SHIFT decides the format; the panel only decides the name and folder. The
+/// panel already appends the right extension in the common case, so this is a
+/// safety net for a name the user edited by hand.
+pub fn normalize_destination(raw: &str, target_ext: &str) -> Result<PathBuf> {
+    let path = PathBuf::from(raw.trim());
+    if path.as_os_str().is_empty() {
+        return Err(ShiftError::validation("That isn't a valid filename."));
+    }
+
+    let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).ok_or_else(|| {
+        ShiftError::new("no_destination_dir", "SHIFT couldn't work out where to save that.")
+            .hint("Choose a folder in the Save panel.")
+    })?;
+    // Resolve the folder now so a directory removed between choosing and saving
+    // is reported before any work starts.
+    let parent = validate_output_dir(&parent.to_string_lossy())?;
+
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .filter(|n| !n.trim().is_empty())
+        .ok_or_else(|| ShiftError::validation("That isn't a valid filename."))?;
+
+    let current_ext = path
+        .extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    let target = target_ext.to_ascii_lowercase();
+
+    let final_name = if current_ext == target {
+        name
+    } else if KNOWN_EXTS.contains(&current_ext.as_str()) {
+        // A different SHIFT format: replace it, never let the two disagree.
+        let stem = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or(name);
+        format!("{stem}.{target}")
+    } else {
+        // Not an extension we own (or none at all): keep the name intact and
+        // append, so "my.file.name" does not lose its last segment.
+        format!("{name}.{target}")
+    };
+
+    Ok(parent.join(final_name))
+}
+
+/// `~/Documents/Samples` rather than a full home path, for display only.
+pub fn abbreviate_home(path: &Path) -> String {
+    let text = path.to_string_lossy().to_string();
+    match dirs::home_dir() {
+        Some(home) => {
+            let home = home.to_string_lossy().to_string();
+            if text == home {
+                "~".to_string()
+            } else if let Some(rest) = text.strip_prefix(&format!("{home}/")) {
+                format!("~/{rest}")
+            } else {
+                text
+            }
+        }
+        None => text,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -187,6 +258,36 @@ mod tests {
         for bad in ["file:///etc/passwd", "javascript:alert(1)", "", "not a url", "ftp://x/y"] {
             assert!(validate_url(bad).is_err(), "{bad} should be rejected");
         }
+    }
+
+    fn dest(name: &str, ext: &str) -> String {
+        let dir = std::env::temp_dir();
+        normalize_destination(&dir.join(name).to_string_lossy(), ext)
+            .unwrap()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string()
+    }
+
+    #[test]
+    fn destination_extension_always_matches_the_format() {
+        assert_eq!(dest("clip.mp3", "mp3"), "clip.mp3");
+        // Case differences are not a disagreement.
+        assert_eq!(dest("clip.MP3", "mp3"), "clip.MP3");
+        // A different SHIFT format is replaced, never left to disagree.
+        assert_eq!(dest("photo.png", "jpg"), "photo.jpg");
+        assert_eq!(dest("clip.mov", "mp4"), "clip.mp4");
+        // No extension at all: append.
+        assert_eq!(dest("carmela-sample", "mp3"), "carmela-sample.mp3");
+        // A dotted name we do not own keeps every segment.
+        assert_eq!(dest("my.file.name", "jpg"), "my.file.name.jpg");
+    }
+
+    #[test]
+    fn destination_needs_a_real_folder() {
+        assert!(normalize_destination("/nope/does/not/exist/x.mp3", "mp3").is_err());
+        assert!(normalize_destination("", "mp3").is_err());
     }
 
     #[test]

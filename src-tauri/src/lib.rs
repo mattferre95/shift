@@ -35,6 +35,7 @@ pub fn run() {
             commands::analyze_file,
             commands::validate_clip,
             commands::start_export,
+            commands::save_prompt,
             commands::cancel_job,
             commands::default_output_dir,
             commands::set_output_dir,

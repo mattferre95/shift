@@ -75,6 +75,11 @@ pub struct ExportRequest {
     /// Images only. Ignored by the audio/video pipeline.
     #[serde(default)]
     pub compression: Option<Compression>,
+    /// Full path chosen in the native Save panel. When present the user has
+    /// already named the file and confirmed any overwrite, so SHIFT writes
+    /// exactly there instead of inventing a collision-safe name.
+    #[serde(default)]
+    pub destination_path: Option<String>,
 }
 
 // --------------------------------------------------------------------- event
@@ -90,6 +95,8 @@ pub struct JobOutput {
     /// Size of the input, when it was a local file, so the UI can show the
     /// before/after of a compression.
     pub source_bytes: Option<u64>,
+    /// Where it landed, home-abbreviated, for the completion screen.
+    pub directory: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -289,6 +296,95 @@ fn output_stem(request: &ExportRequest, source_title: &str, clip: Option<ClipRan
     }
 }
 
+/// Resolve where the finished file goes.
+///
+/// A path from the Save panel wins outright: the user named it and macOS has
+/// already asked about overwriting. Without one, fall back to the generated
+/// collision-safe name so nothing is ever clobbered silently.
+fn resolve_destination(
+    request: &ExportRequest,
+    output_dir: &std::path::Path,
+    stem: &str,
+) -> Result<PathBuf> {
+    match request.destination_path.as_deref() {
+        Some(chosen) => validation::normalize_destination(chosen, request.format.ext()),
+        None => Ok(filesystem::unique_path(output_dir, stem, request.format.ext())),
+    }
+}
+
+/// The filename SHIFT would choose, used to prefill the Save panel. Naming
+/// rules stay here so the frontend never has to reimplement them.
+pub fn suggested_filename(request: &ExportRequest, source_title: &str) -> String {
+    let clip = request
+        .clip
+        .as_ref()
+        .and_then(|c| validation::validate_clip(&c.start, &c.end, None).ok());
+
+    // For a local file the stem comes from the path, exactly as the job itself
+    // derives it — the caller's title still carries the extension. Only a URL
+    // needs the title passed in, since re-fetching it here would be wasteful.
+    let title = match &request.input {
+        InputSpec::Local { path } => PathBuf::from(path)
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| source_title.to_string()),
+        InputSpec::Url { .. } => source_title.to_string(),
+    };
+
+    let stem = output_stem(request, &title, clip);
+    format!("{stem}.{}", request.format.ext())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request(path: &str, format: OutputFormat) -> ExportRequest {
+        ExportRequest {
+            input: InputSpec::Local { path: path.into() },
+            format,
+            clip: None,
+            output_dir: None,
+            compression: None,
+            destination_path: None,
+        }
+    }
+
+    #[test]
+    fn a_local_suggestion_drops_the_source_extension() {
+        // The UI passes the display name, which still has ".HEIC" on it.
+        let r = request("/photos/IMG_7397.HEIC", OutputFormat::Jpg);
+        assert_eq!(suggested_filename(&r, "IMG_7397.HEIC"), "IMG_7397.jpg");
+    }
+
+    #[test]
+    fn a_compressed_image_is_marked_in_the_name() {
+        let mut r = request("/photos/IMG_7397.HEIC", OutputFormat::Jpg);
+        r.compression = Some(Compression::Balanced);
+        assert_eq!(suggested_filename(&r, "IMG_7397.HEIC"), "IMG_7397-compressed.jpg");
+    }
+
+    #[test]
+    fn a_trimmed_local_file_is_marked_in_the_name() {
+        let mut r = request("/clips/ScreenRecording.mov", OutputFormat::Mp4);
+        r.clip = Some(ClipSpec { start: "00:02.000".into(), end: "00:05.000".into() });
+        assert_eq!(suggested_filename(&r, "ScreenRecording.mov"), "ScreenRecording-trimmed.mp4");
+    }
+
+    #[test]
+    fn a_url_clip_carries_its_range() {
+        let r = ExportRequest {
+            input: InputSpec::Url { url: "https://example.com/x".into(), quality: None },
+            format: OutputFormat::Mp3,
+            clip: Some(ClipSpec { start: "02:52.000".into(), end: "02:56.000".into() }),
+            output_dir: None,
+            compression: None,
+            destination_path: None,
+        };
+        assert_eq!(suggested_filename(&r, "The Sopranos"), "The-Sopranos-02m52s-02m56s.mp3");
+    }
+}
+
 /// Run one export to completion. Called on a worker thread.
 pub fn run(app: AppHandle, job_id: String, request: ExportRequest, cancel: Arc<CancelToken>) {
     let settings = app.state::<SettingsStore>();
@@ -378,7 +474,7 @@ fn execute(
 
     let (actions, stages) = plan_actions(request, clip);
     let stem = output_stem(request, &source_title, clip);
-    let destination = filesystem::unique_path(&output_dir, &stem, request.format.ext());
+    let destination = resolve_destination(request, &output_dir, &stem)?;
     let filename = destination
         .file_name()
         .map(|f| f.to_string_lossy().to_string())
@@ -457,14 +553,17 @@ fn execute(
         return Err(ShiftError::cancelled());
     }
 
-    // Re-check the name: another export may have taken it while this one ran.
-    let destination = if destination.exists() {
+    // Without an explicit destination, re-check the generated name: another
+    // export may have taken it while this one ran. A path the user chose is
+    // left alone — they already confirmed it.
+    let destination = if request.destination_path.is_none() && destination.exists() {
         filesystem::unique_path(&output_dir, &stem, request.format.ext())
     } else {
         destination
     };
     let size = filesystem::finalize(&temp_output, &destination)?;
-    settings.set_output_dir(&output_dir.to_string_lossy());
+    let landed_in = destination.parent().unwrap_or(&output_dir).to_path_buf();
+    settings.set_output_dir(&landed_in.to_string_lossy());
 
     let filename = destination
         .file_name()
@@ -477,6 +576,7 @@ fn execute(
         size_bytes: size,
         remuxed: plan.remuxed,
         source_bytes: None,
+        directory: validation::abbreviate_home(&landed_in),
     });
 
     // `temp` drops here, removing the whole per-job directory.
@@ -521,7 +621,7 @@ fn execute_image(
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "image".into());
     let stem = output_stem(request, &stem_source, None);
-    let destination = filesystem::unique_path(output_dir, &stem, request.format.ext());
+    let destination = resolve_destination(request, output_dir, &stem)?;
 
     let work_dir = temp.sub("out")?;
     let temp_output = work_dir.join(format!("output.{}", request.format.ext()));
@@ -588,13 +688,14 @@ fn execute_image(
         return Err(ShiftError::cancelled());
     }
 
-    let destination = if destination.exists() {
+    let destination = if request.destination_path.is_none() && destination.exists() {
         filesystem::unique_path(output_dir, &stem, request.format.ext())
     } else {
         destination
     };
     let size = filesystem::finalize(&temp_output, &destination)?;
-    settings.set_output_dir(&output_dir.to_string_lossy());
+    let landed_in = destination.parent().unwrap_or(output_dir).to_path_buf();
+    settings.set_output_dir(&landed_in.to_string_lossy());
 
     reporter.finish(JobOutput {
         path: destination.to_string_lossy().to_string(),
@@ -605,6 +706,7 @@ fn execute_image(
         size_bytes: size,
         remuxed: false,
         source_bytes: Some(probe.size_bytes),
+        directory: validation::abbreviate_home(&landed_in),
     });
 
     Ok(())
