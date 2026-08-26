@@ -23,13 +23,18 @@ Sidecars are not committed. `npm run sidecars` is required before the first buil
 
 - **The frontend never builds a command.** It submits structured intent to a
   narrow Tauri command; the Rust layer owns every process, path and argument.
-- **All codec and container decisions live in `src-tauri/src/media/profiles.rs`.**
-  Do not spread FFmpeg flags elsewhere.
+- **Format decisions live in two places and nowhere else.** Audio and video
+  codec and container choices are in `src-tauri/src/media/profiles.rs`; image
+  conversion and compression are in `src-tauri/src/media/image.rs`. Do not
+  spread FFmpeg or sips flags beyond them.
 - **yt-dlp is one provider behind `providers::UrlProvider`**, not a hardcoded
   dependency.
 - **Never invent progress.** Report a percentage only when the native layer has
   a real one; otherwise show stage position.
-- **Never overwrite an output.** `filesystem::unique_path` handles collisions.
+- **Never overwrite an output by accident.** Automatically named outputs go
+  through `filesystem::unique_path`. A Save As destination is written to the
+  path the user confirmed, because the native panel already asked about
+  replacing it.
 - The design tokens in `src/app/index.css` are transcribed from the approved
   design. Do not add values that are not in it.
 
