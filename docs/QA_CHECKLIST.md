@@ -10,13 +10,23 @@ cd src-tauri && cargo test                                   # unit + pipeline
 cargo test --test url_pipeline -- --ignored --nocapture      # needs network
 ```
 
-- `cargo test --lib` — 17 tests: timestamp parsing and rejection, clip bounds,
+- `cargo test --lib` — 44 tests: timestamp parsing and rejection, clip bounds,
   URL scheme rejection, filename sanitizing, collision-safe naming, remux vs
-  transcode decisions, progress parsing.
-- `tests/media_pipeline.rs` — 9 tests against generated media: probe, MP3/WAV
+  transcode decisions, progress parsing, the palette-based GIF graph, **every
+  loop frame rate dividing 100**, the 30s loop cap, silent-and-endless loop
+  flags, no-upscale scaling, FLAC losslessness flags, the inverted AVIF quality
+  ladder, and AVIF's refusal of a transparent source.
+- `tests/media_pipeline.rs` — 14 tests against generated media: probe, MP3/WAV
   extraction, MP4→MOV stream copy, **accurate trim (2.000→4.500 gives 2.5s
   ±0.15)**, VP9/Opus transcode, cancellation mid-encode, refusal to finalize an
-  empty output.
+  empty output, **a real GIF whose frame delays are a flat 8cs**, no upscale of a
+  200px source, animated WEBP proven to be `webp_anim` and smaller than the
+  equivalent GIF, loops proven silent, and **FLAC round-tripped bit-for-bit
+  against its PCM source**.
+- `tests/image_pipeline.rs` — 13 tests: HEIC/JPG/PNG conversion, PNG lossless
+  optimization, AVIF from every supported source, AVIF undercutting WEBP,
+  **a 12 MP AVIF encoding inside 12s** (the `-cpu-used 6` regression guard), and
+  transparency either preserved by WEBP or refused by AVIF.
 - `tests/url_pipeline.rs` — 5 tests against live public sources: generic-extractor
   analysis, real-extractor analysis with backend thumbnail fetch, download +
   accurate clip to MP3, normalized failure on an unreadable link, cancelled
@@ -42,6 +52,20 @@ from published sample/CC-BY sources.
 | 11 | Cancel an active job | ✅ mid-download; state restored, no stray processes, no partial file |
 | 12 | Failures are readable, raw log folded away | ✅ "Couldn't fetch this link." + Technical details |
 | 13 | Reveal the output in Finder | ✅ button wired to the opener plugin |
+| 14 | Export a GIF from a local video | ⬜ |
+| 15 | Export an animated WEBP and confirm it is smaller than the GIF | ⬜ |
+| 16 | Pick a loop on a video longer than 30s and confirm the trim arms itself visibly | ⬜ |
+| 17 | Turn that trim off and confirm EXPORT disables with the cap explained | ⬜ |
+| 18 | Export FLAC from a local WAV | ⬜ |
+| 19 | Export AVIF from a HEIC photo | ⬜ |
+| 20 | Drop a transparent PNG and confirm AVIF is absent with the reason shown | ⬜ |
+| 21 | Open an MKV and confirm it converts | ⬜ |
+| 22 | Export M4A from a video (AAC source) and confirm it is a stream copy | ✅ bitrate identical to source, no video stream, moov first |
+| 23 | Export M4A from an MP3 and confirm it re-encodes to AAC | ✅ 37 kbps MP3 → 127.5 kbps AAC |
+| 24 | Pick GIF on a long source: trim arms at 10s, limit reads 15s | ✅ |
+| 25 | Pick animated WEBP: trim arms at 15s, limit reads 30s | ✅ |
+| 26 | Set a 25s WEBP range then switch to GIF: range re-arms to 10s | ✅ no disabled dead-end |
+| 27 | OUTPUT row at 980×680 stays one row, grouped video / loop / audio | ✅ 9 chips, three runs |
 
 ## Also verified
 
@@ -50,6 +74,17 @@ from published sample/CC-BY sources.
 - No file is ever overwritten: `file.mp4` → `file-2.mp4` → `file-3.mp4`.
 - Local media is never uploaded; only URL analysis and download touch the network.
 - Thumbnails are fetched by the backend, never by the webview.
+
+## Loop behaviour worth re-checking after any FFmpeg bump
+
+- GIF frame delays must stay a single distinct value per preset. A future
+  FFmpeg changing `fps` rounding would reintroduce judder silently — the
+  automated test catches it, but only if it is run.
+- `palettegen`/`paletteuse` defaults (`stats_mode=full`, `dither=sierra2_4a`)
+  are written out explicitly; if FFmpeg changes its defaults, SHIFT's output
+  does not move.
+- libaom's `-cpu-used 6` is a timing test. If a build regresses it, a 12 MP
+  AVIF goes from ~2s to ~20s and the app looks hung.
 
 ## Not yet covered
 

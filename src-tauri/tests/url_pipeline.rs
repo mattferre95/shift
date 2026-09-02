@@ -9,7 +9,7 @@
 
 use shift_lib::media::ffmpeg;
 use shift_lib::media::ffprobe;
-use shift_lib::media::profiles::{build_plan, OutputFormat};
+use shift_lib::media::profiles::{build_plan, LoopSize, OutputFormat};
 use shift_lib::process::CancelToken;
 use shift_lib::providers::{self, DownloadKind};
 use shift_lib::validation::{validate_url, ClipRange};
@@ -104,7 +104,7 @@ fn downloads_then_clips_to_mp3() {
     // file can, which is exactly what the job runner does before encoding.
     let clip = ClipRange { start: 1.0, end: 4.0 };
     let out = dir.join("clip.mp3");
-    let plan = build_plan(&downloaded, &probe, OutputFormat::Mp3, Some(clip), &out).unwrap();
+    let plan = build_plan(&downloaded, &probe, OutputFormat::Mp3, Some(clip), LoopSize::default(), &out).unwrap();
     ffmpeg::execute(&plan, Some(clip.duration()), &cancel, &mut |_| {}).unwrap();
 
     let result = ffprobe::probe(&out, &cancel).unwrap();
@@ -134,4 +134,36 @@ fn cancelling_a_download_kills_the_process_tree() {
         .expect_err("a cancelled download must not report success");
     assert_eq!(err.code, "cancelled");
     assert!(started.elapsed().as_secs() < 15, "cancel was not prompt");
+}
+
+#[test]
+#[ignore = "requires network"]
+fn downloads_then_exports_m4a() {
+    let url = validate_url(SAMPLE).unwrap();
+    let provider = providers::for_url(&url).unwrap();
+    let cancel = CancelToken::new();
+    let dir = workspace("m4a");
+
+    let downloaded = provider
+        .download(&url, DownloadKind::Audio, "best", &dir, &cancel, &mut |_| {})
+        .unwrap();
+    let probe = ffprobe::probe(&downloaded, &cancel).unwrap();
+    let out = dir.join("url.m4a");
+    let plan =
+        build_plan(&downloaded, &probe, OutputFormat::M4a, None, LoopSize::default(), &out).unwrap();
+    ffmpeg::execute(&plan, probe.duration, &cancel, &mut |_| {}).unwrap();
+
+    let result = ffprobe::probe(&out, &cancel).unwrap();
+    assert!(result.video.is_none(), "an audio export must carry no video stream");
+    assert_eq!(result.audio.as_ref().unwrap().codec, "aac");
+
+    // yt-dlp's best audio is usually already AAC or Opus. Whichever it was, the
+    // decision must have been the faithful one: copied if AAC, re-encoded if not.
+    let src = probe.audio.as_ref().unwrap().codec.as_str();
+    assert_eq!(
+        plan.remuxed,
+        src == "aac",
+        "source was {src}; copy is only correct when it is already AAC"
+    );
+    println!("produced {} from a {src} source (copied: {})", out.display(), plan.remuxed);
 }

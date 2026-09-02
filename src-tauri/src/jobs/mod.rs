@@ -8,7 +8,7 @@
 use crate::errors::{Result, ShiftError};
 use crate::filesystem::{self, TempDir};
 use crate::media::image::{self, Compression};
-use crate::media::{ffmpeg, ffprobe, profiles::{self, OutputFormat}};
+use crate::media::{ffmpeg, ffprobe, profiles::{self, LoopSize, OutputFormat}};
 use crate::process::{Binary, CancelToken};
 use crate::providers::{self, DownloadKind};
 use crate::settings::SettingsStore;
@@ -46,6 +46,7 @@ pub enum ActionSpec {
     ExtractAudio { format: OutputFormat },
     ConvertImage { format: OutputFormat },
     CompressImage { level: Compression },
+    MakeLoop { format: OutputFormat, size: LoopSize },
 }
 
 // ------------------------------------------------------------------- request
@@ -75,6 +76,9 @@ pub struct ExportRequest {
     /// Images only. Ignored by the audio/video pipeline.
     #[serde(default)]
     pub compression: Option<Compression>,
+    /// GIF and animated WEBP only. Ignored by every other output.
+    #[serde(default)]
+    pub loop_size: Option<LoopSize>,
     /// Full path chosen in the native Save panel. When present the user has
     /// already named the file and confirmed any overwrite, so SHIFT writes
     /// exactly there instead of inventing a collision-safe name.
@@ -241,7 +245,18 @@ fn plan_actions(request: &ExportRequest, clip: Option<ClipRange>) -> (Vec<Action
         }
     }
 
-    if let Some(range) = clip {
+    if request.format.is_animation() {
+        // A loop is one pass whether or not it is also trimmed, so the trim
+        // does not get a stage of its own the way it does elsewhere.
+        if let Some(range) = clip {
+            actions.push(ActionSpec::Trim { start: range.start, end: range.end });
+        }
+        actions.push(ActionSpec::MakeLoop {
+            format: request.format,
+            size: request.loop_size.unwrap_or_default(),
+        });
+        stages.push("Building loop…".into());
+    } else if let Some(range) = clip {
         actions.push(ActionSpec::Trim { start: range.start, end: range.end });
         stages.push("Clipping…".into());
     } else if request.format.is_audio_only() {
@@ -266,6 +281,8 @@ fn output_stem(request: &ExportRequest, source_title: &str, clip: Option<ClipRan
             validation::timestamp_tag(range.end)
         ),
         (InputSpec::Url { .. }, None) => base,
+        // A trimmed loop is already named by what it is, not by the trim.
+        (InputSpec::Local { .. }, Some(_)) if request.format.is_animation() => base,
         (InputSpec::Local { .. }, Some(_)) => format!("{base}-trimmed"),
         (InputSpec::Local { path }, None) if request.format.is_image() => {
             let base = filesystem::sanitize_stem(source_title);
@@ -346,6 +363,7 @@ mod tests {
             clip: None,
             output_dir: None,
             compression: None,
+            loop_size: None,
             destination_path: None,
         }
     }
@@ -379,6 +397,7 @@ mod tests {
             clip: Some(ClipSpec { start: "02:52.000".into(), end: "02:56.000".into() }),
             output_dir: None,
             compression: None,
+            loop_size: None,
             destination_path: None,
         };
         assert_eq!(suggested_filename(&r, "The Sopranos"), "The-Sopranos-02m52s-02m56s.mp3");
@@ -437,8 +456,11 @@ fn execute(
     // their own short pipeline rather than being bent into the A/V one. Job
     // ids, temp dirs, progress events, cancellation, naming and finalizing are
     // all still the shared machinery below.
+    // The *input* decides which pipeline runs, not the output. WEBP is both a
+    // still and an animation, so asking the format alone would send a video
+    // headed for animated WebP into the image pipeline.
     if let InputSpec::Local { path } = &request.input {
-        if request.format.is_image() || image_input(path) {
+        if image_input(path) {
             return execute_image(app, job_id, request, cancel, settings, slot, temp, &output_dir);
         }
     }
@@ -535,7 +557,14 @@ fn execute(
 
     let work_dir = temp.sub("out")?;
     let temp_output = work_dir.join(format!("output.{}", request.format.ext()));
-    let plan = profiles::build_plan(&source_path, &probe, request.format, clip, &temp_output)?;
+    let plan = profiles::build_plan(
+        &source_path,
+        &probe,
+        request.format,
+        clip,
+        request.loop_size.unwrap_or_default(),
+        &temp_output,
+    )?;
 
     let expected = clip.map(|c| c.duration()).or(probe.duration);
     {
@@ -630,6 +659,7 @@ fn execute_image(
         &probe.format,
         request.format,
         compression,
+        probe.has_alpha,
         &work_dir,
         &temp_output,
     )?;

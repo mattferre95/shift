@@ -7,7 +7,7 @@
 use shift_lib::filesystem;
 use shift_lib::media::ffmpeg;
 use shift_lib::media::ffprobe;
-use shift_lib::media::profiles::{build_plan, OutputFormat};
+use shift_lib::media::profiles::{build_plan, LoopSize, OutputFormat};
 use shift_lib::process::{resolve, run_capture, Binary, CancelToken};
 use shift_lib::validation::ClipRange;
 use std::path::{Path, PathBuf};
@@ -48,7 +48,7 @@ fn convert(input: &Path, format: OutputFormat, clip: Option<ClipRange>, name: &s
     let output = workspace().join(format!("{name}.{}", format.ext()));
     let _ = std::fs::remove_file(&output);
 
-    let plan = build_plan(input, &probe, format, clip, &output).expect("plan");
+    let plan = build_plan(input, &probe, format, clip, LoopSize::default(), &output).expect("plan");
     let expected = clip.map(|c| c.duration()).or(probe.duration);
 
     let mut seen: Vec<f64> = Vec::new();
@@ -98,7 +98,7 @@ fn mp4_to_mov_is_a_stream_copy() {
     let cancel = CancelToken::new();
     let probe = ffprobe::probe(&input, &cancel).unwrap();
     let output = workspace().join("copy.mov");
-    let plan = build_plan(&input, &probe, OutputFormat::Mov, None, &output).unwrap();
+    let plan = build_plan(&input, &probe, OutputFormat::Mov, None, LoopSize::default(), &output).unwrap();
     assert!(plan.remuxed, "an H.264/AAC MP4 should remux into MOV");
 
     let _ = std::fs::remove_file(&output);
@@ -161,7 +161,7 @@ fn cancellation_stops_the_process() {
     let _ = std::fs::remove_file(&output);
 
     // VP9 on a full 6s clip is slow enough to still be running when we pull it.
-    let plan = build_plan(&input, &probe, OutputFormat::Webm, None, &output).unwrap();
+    let plan = build_plan(&input, &probe, OutputFormat::Webm, None, LoopSize::default(), &output).unwrap();
 
     let token = std::sync::Arc::clone(&cancel);
     std::thread::spawn(move || {
@@ -195,4 +195,231 @@ fn a_finished_file_only_moves_once_it_is_real() {
     assert_eq!(size, 10);
     assert!(dir.join("dest.mp4").is_file());
     assert!(!good.exists(), "the temp file should be gone after the move");
+}
+
+// ---------------------------------------------------------------- loops
+
+/// Every frame delay a GIF actually carries, in centiseconds.
+fn gif_frame_delays(path: &Path) -> Vec<i64> {
+    let args: Vec<String> = [
+        "-v", "error", "-select_streams", "v:0",
+        "-show_entries", "packet=duration", "-of", "csv=p=0",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .chain(std::iter::once(path.to_string_lossy().to_string()))
+    .collect();
+    let out = run_capture(Binary::Ffprobe, &args, &CancelToken::new()).expect("ffprobe");
+    out.stdout.lines().filter_map(|l| l.trim().parse::<i64>().ok()).collect()
+}
+
+fn stream_field(path: &Path, field: &str) -> String {
+    let args: Vec<String> = [
+        "-v", "error", "-select_streams", "v:0",
+        "-show_entries", &format!("stream={field}"), "-of", "csv=p=0",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .chain(std::iter::once(path.to_string_lossy().to_string()))
+    .collect();
+    let out = run_capture(Binary::Ffprobe, &args, &CancelToken::new()).expect("ffprobe");
+    out.stdout.trim().to_string()
+}
+
+#[test]
+fn a_gif_really_encodes_and_loops_uniformly() {
+    let clip = ClipRange { start: 1.0, end: 4.0 };
+    let gif = convert(&fixture(), OutputFormat::Gif, Some(clip), "loop-timing");
+
+    assert_eq!(stream_field(&gif, "codec_name"), "gif");
+
+    // The filtergraph carries `min(iw,480)` — a comma inside a filter argument.
+    // If FFmpeg's parser had read it as a filter separator the run would have
+    // failed, so reaching a real 480-or-less width proves the quoting holds.
+    let width: u32 = stream_field(&gif, "width").parse().expect("width");
+    assert!(width <= 480, "width {width} should be capped");
+    // The 640px fixture is wider than the 480 cap, so it must have been scaled.
+    assert_eq!(width, 480);
+
+    // GIF delays are whole centiseconds; the Standard preset must produce
+    // exactly one distinct value or playback judders.
+    let delays = gif_frame_delays(&gif);
+    assert!(!delays.is_empty(), "no frames");
+    let mut distinct: Vec<i64> = delays.clone();
+    distinct.sort_unstable();
+    distinct.dedup();
+    assert_eq!(distinct, vec![8], "12.5 fps must be a flat 8cs, got {distinct:?}");
+}
+
+#[test]
+fn a_gif_never_upscales_a_source_smaller_than_the_preset() {
+    let small = workspace().join("small.mp4");
+    if !small.is_file() {
+        let args: Vec<String> = [
+            "-y", "-loglevel", "error",
+            "-f", "lavfi", "-i", "testsrc2=size=200x120:rate=30", "-t", "2",
+            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .chain(std::iter::once(small.to_string_lossy().to_string()))
+        .collect();
+        assert!(run_capture(Binary::Ffmpeg, &args, &CancelToken::new()).unwrap().success);
+    }
+    let gif = convert(&small, OutputFormat::Gif, None, "small-loop");
+    assert_eq!(stream_field(&gif, "width").parse::<u32>().unwrap(), 200);
+}
+
+#[test]
+fn an_animated_webp_really_animates_and_beats_the_gif() {
+    let clip = ClipRange { start: 1.0, end: 4.0 };
+    let webp = convert(&fixture(), OutputFormat::Webp, Some(clip), "loop-size");
+    let gif = convert(&fixture(), OutputFormat::Gif, Some(clip), "loop-size");
+
+    // Not a one-frame still wearing an animation's name.
+    assert_eq!(stream_field(&webp, "codec_name"), "webp_anim");
+
+    let (w, g) = (
+        std::fs::metadata(&webp).unwrap().len(),
+        std::fs::metadata(&gif).unwrap().len(),
+    );
+    assert!(w < g, "animated WEBP ({w}) should undercut GIF ({g})");
+}
+
+#[test]
+fn a_loop_carries_no_audio() {
+    let clip = ClipRange { start: 0.0, end: 2.0 };
+    for (format, name) in [(OutputFormat::Gif, "silent"), (OutputFormat::Webp, "silent")] {
+        let out = convert(&fixture(), format, Some(clip), name);
+        // The fixture has an AAC track; neither container may carry it over.
+        let probe = ffprobe::probe(&out, &CancelToken::new()).expect("probe");
+        assert!(probe.audio.is_none(), "{format:?} must be silent");
+    }
+}
+
+// ---------------------------------------------------------------- flac
+
+/// Decode anything to raw 16-bit PCM and fingerprint it.
+fn pcm_digest(src: &Path, name: &str) -> (u64, usize) {
+    let dest = workspace().join(name);
+    let args: Vec<String> = [
+        "-y", "-loglevel", "error", "-i", &src.to_string_lossy(),
+        "-f", "s16le", "-c:a", "pcm_s16le",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .chain(std::iter::once(dest.to_string_lossy().to_string()))
+    .collect();
+    assert!(run_capture(Binary::Ffmpeg, &args, &CancelToken::new()).unwrap().success);
+    let bytes = std::fs::read(&dest).unwrap();
+    // FNV-1a. A hash, not the samples, so a mismatch prints two numbers rather
+    // than several megabytes of vector.
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in &bytes {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    (h, bytes.len())
+}
+
+#[test]
+fn flac_round_trips_a_pcm_source_bit_for_bit() {
+    // The source must already be integer PCM. Going FLAC-vs-WAV straight from
+    // the AAC fixture would compare two *independent* float→s16 conversions,
+    // each of which applies its own dither — they differ in the low bit for
+    // reasons that have nothing to do with FLAC.
+    let wav = convert(&fixture(), OutputFormat::Wav, None, "flac-source");
+
+    let cancel = CancelToken::new();
+    let probe = ffprobe::probe(&wav, &cancel).expect("probe wav");
+    let flac = workspace().join("flac-roundtrip.flac");
+    let _ = std::fs::remove_file(&flac);
+    let plan =
+        build_plan(&wav, &probe, OutputFormat::Flac, None, LoopSize::default(), &flac).expect("plan");
+    let mut noop = |_: f64| {};
+    ffmpeg::execute(&plan, probe.duration, &cancel, &mut noop).expect("flac encode");
+
+    let (before, n) = pcm_digest(&wav, "flac-before.raw");
+    let (after, m) = pcm_digest(&flac, "flac-after.raw");
+    assert_eq!((before, n), (after, m), "FLAC altered the samples");
+
+    let (fsz, wsz) =
+        (std::fs::metadata(&flac).unwrap().len(), std::fs::metadata(&wav).unwrap().len());
+    assert!(fsz < wsz, "FLAC ({fsz}) should undercut WAV ({wsz}) while holding the same samples");
+}
+
+// ----------------------------------------------------------------- m4a
+
+#[test]
+fn m4a_copies_an_aac_source_and_re_encodes_anything_else() {
+    // The fixture's audio is already AAC, so extracting it is a pure container
+    // change: same bytes, no generation loss.
+    let copied = convert(&fixture(), OutputFormat::M4a, None, "m4a-copy");
+    let src = ffprobe::probe(&fixture(), &CancelToken::new()).unwrap();
+    let out = ffprobe::probe(&copied, &CancelToken::new()).unwrap();
+    assert_eq!(out.audio.as_ref().unwrap().codec, "aac");
+    assert!(out.video.is_none(), "an audio export must carry no video stream");
+    assert_eq!(src.audio.as_ref().unwrap().codec, "aac", "fixture precondition");
+
+    // An MP3 source must not be waved into an .m4a untouched.
+    let mp3 = convert(&fixture(), OutputFormat::Mp3, None, "m4a-src");
+    let probe = ffprobe::probe(&mp3, &CancelToken::new()).unwrap();
+    let dest = workspace().join("m4a-from-mp3.m4a");
+    let _ = std::fs::remove_file(&dest);
+    let plan =
+        build_plan(&mp3, &probe, OutputFormat::M4a, None, LoopSize::default(), &dest).expect("plan");
+    assert!(!plan.remuxed, "MP3 → M4A must re-encode");
+    let mut noop = |_: f64| {};
+    ffmpeg::execute(&plan, probe.duration, &CancelToken::new(), &mut noop).expect("encode");
+    assert_eq!(ffprobe::probe(&dest, &CancelToken::new()).unwrap().audio.unwrap().codec, "aac");
+}
+
+#[test]
+fn m4a_puts_its_index_at_the_front() {
+    // An MP4-family file with `moov` after `mdat` has to be fully downloaded
+    // before anything will play it.
+    let m4a = convert(&fixture(), OutputFormat::M4a, None, "m4a-faststart");
+    let head = std::fs::read(&m4a).unwrap();
+    let moov = head.windows(4).position(|w| w == b"moov").expect("moov box");
+    let mdat = head.windows(4).position(|w| w == b"mdat").expect("mdat box");
+    assert!(moov < mdat, "moov ({moov}) must precede mdat ({mdat})");
+}
+
+#[test]
+fn gif_and_animated_webp_have_different_ceilings() {
+    // 20s is a legal animated WEBP and an illegal GIF. Proven against real
+    // encodes, not just the planner.
+    let long = workspace().join("long.mp4");
+    if !long.is_file() {
+        let args: Vec<String> = [
+            "-y", "-loglevel", "error", "-f", "lavfi",
+            "-i", "testsrc2=size=320x180:rate=30", "-t", "20",
+            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .chain(std::iter::once(long.to_string_lossy().to_string()))
+        .collect();
+        assert!(run_capture(Binary::Ffmpeg, &args, &CancelToken::new()).unwrap().success);
+    }
+    let probe = ffprobe::probe(&long, &CancelToken::new()).unwrap();
+    let out = workspace().join("ceiling.out");
+
+    assert!(
+        build_plan(&long, &probe, OutputFormat::Gif, None, LoopSize::default(), &out).is_err(),
+        "20s must be too long for a GIF"
+    );
+    assert!(
+        build_plan(&long, &probe, OutputFormat::Webp, None, LoopSize::default(), &out).is_ok(),
+        "20s must be fine as an animated WEBP"
+    );
+
+    // And the WEBP that results really is smaller than the GIF would have been,
+    // which is the whole reason the limits differ.
+    let webp = convert(&long, OutputFormat::Webp, None, "ceiling");
+    let clip = ClipRange { start: 0.0, end: 15.0 };
+    let gif = convert(&long, OutputFormat::Gif, Some(clip), "ceiling");
+    let (w, g) =
+        (std::fs::metadata(&webp).unwrap().len(), std::fs::metadata(&gif).unwrap().len());
+    assert!(w < g, "20s WEBP ({w}) should undercut a 15s GIF ({g})");
 }

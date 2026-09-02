@@ -23,10 +23,22 @@ Sidecars are not committed. `npm run sidecars` is required before the first buil
 
 - **The frontend never builds a command.** It submits structured intent to a
   narrow Tauri command; the Rust layer owns every process, path and argument.
-- **Format decisions live in two places and nowhere else.** Audio and video
-  codec and container choices are in `src-tauri/src/media/profiles.rs`; image
-  conversion and compression are in `src-tauri/src/media/image.rs`. Do not
-  spread FFmpeg or sips flags beyond them.
+- **Format decisions live in two places and nowhere else.** Audio, video and
+  loop (GIF / animated WEBP) codec and container choices are in
+  `src-tauri/src/media/profiles.rs`; still-image conversion and compression are
+  in `src-tauri/src/media/image.rs`. Do not spread FFmpeg or sips flags beyond
+  them.
+- **WEBP means two things, and the source decides which.** A still from a photo,
+  an animation from a video. The input picks the pipeline in `jobs::execute`;
+  never branch on the output format alone.
+- **Loop frame rates must divide 100.** GIF frame delays are whole
+  centiseconds, so 10 / 12.5 / 20 fps are exact and 12 or 15 are not. Add a
+  preset only if it survives that rule.
+- **Loop length limits are per format** — GIF 15s, animated WEBP 30s — because
+  GIF has no interframe compression. They live in `profiles` and are mirrored in
+  `types/index.ts`; change both together.
+- **An audio stream is only copied when the result means the same thing.**
+  See `audio_copy_is_faithful`. Legal-in-container is not the test.
 - **yt-dlp is one provider behind `providers::UrlProvider`**, not a hardcoded
   dependency.
 - **Never invent progress.** Report a percentage only when the native layer has
@@ -49,10 +61,13 @@ Both look like "the app hangs with no child process in `ps`":
 
 ## Scope
 
-Supported today: URL download with optional clipping, exporting MP4/MP3/WAV;
-local video/audio conversion, trimming and audio extraction; and image
-conversion from HEIC/HEIF/JPG/PNG/WEBP to JPG/PNG/WEBP with optional
-compression. Every export is named and placed through the native Save panel.
+Supported today: URL download with optional clipping, exporting
+MP4/GIF/WEBP/MP3/WAV; local video and audio conversion, trimming and audio
+extraction across MP4/MOV/WEBM and MP3/M4A/WAV/FLAC; silent looping export to
+GIF (max 15s) and animated WEBP (max 30s); and image conversion from
+HEIC/HEIF/JPG/PNG/WEBP/AVIF to JPG/PNG/WEBP/AVIF with optional compression.
+Reads more containers than it writes — MKV, M4V, AVI, AIFF, OGG and Opus
+included. Every export is named and placed through the native Save panel.
 
 Still out: batch, presets, history, accounts, analytics, cloud. Ideas for later
 go in the future-work section of `docs/ARCHITECTURE.md`, not into the app.

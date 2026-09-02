@@ -34,23 +34,40 @@ converters to navigate.
 
 - Paste any link yt-dlp supports
 - Read the title, thumbnail, duration and source before committing to anything
-- Export **MP4**, **MP3** or **WAV**
+- Export **MP4**, **GIF**, **WEBP**, **MP3**, **M4A** or **WAV**
 - Optional **IN / OUT** clipping with millisecond precision
 - Quality selection where the source actually offers alternatives
 
 ### Local video and audio
 
-- Read **MP4 · MOV · WEBM** and **MP3 · WAV · M4A · AAC**
+- Read **MP4 · MOV · WEBM · MKV · M4V · AVI** and
+  **MP3 · WAV · M4A · AAC · FLAC · AIFF · OGG · OPUS**
+- Export **MP4 · MOV · WEBM** and **MP3 · M4A · WAV · FLAC**
 - Convert between compatible formats, copying streams untouched when possible
 - Trim to an exact range
-- Extract the audio from a video
+- Extract the audio from a video — to **M4A** straight from an MP4 this is a
+  lossless container change, not a second generation
+- Export lossless **FLAC** — the same samples as WAV in roughly 40% of the space
+
+### Loops
+
+- Turn any clip into a **GIF** or an **animated WEBP**
+- Three sizes — Small, Standard, Large — that set width and frame rate together
+- Frame rates chosen so GIF's centisecond timing comes out exactly even, with no
+  judder
+- **GIF is capped at 15 seconds**, because every frame is a whole image and
+  length becomes file size. Animated WEBP keeps **30 seconds** — it compresses
+  between frames, and 30 seconds of it is smaller than 15 seconds of GIF
+- Never upscaled past the source
 
 ### Images
 
-- Read **HEIC · HEIF · JPG · JPEG · PNG · WEBP**
-- Export **JPG · PNG · WEBP**
+- Read **HEIC · HEIF · JPG · JPEG · PNG · WEBP · AVIF**
+- Export **JPG · PNG · WEBP · AVIF**
 - Quality presets for the lossy formats — None, Light, Balanced, Strong
 - Lossless optimization for PNG, which never touches a pixel
+- AVIF for the smallest photographs by a wide margin; it is not offered for
+  images with transparency, which it cannot carry
 
 Every export is named and placed through the native macOS Save panel, so the
 file lands exactly where you put it. Long jobs show real progress and can be

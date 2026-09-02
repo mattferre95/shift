@@ -15,8 +15,8 @@ use crate::process::{run_capture, Binary, CancelToken};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-/// Local image inputs accepted in V1.1.
-pub const IMAGE_EXTS: [&str; 6] = ["heic", "heif", "jpg", "jpeg", "png", "webp"];
+/// Local image inputs. AVIF is included so SHIFT can read back what it writes.
+pub const IMAGE_EXTS: [&str; 7] = ["heic", "heif", "jpg", "jpeg", "png", "webp", "avif"];
 
 pub fn is_image_ext(ext: &str) -> bool {
     IMAGE_EXTS.contains(&ext.to_ascii_lowercase().as_str())
@@ -31,6 +31,9 @@ pub struct ImageProbe {
     /// As reported by macOS, e.g. `heic`, `jpeg`, `png`.
     pub format: String,
     pub size_bytes: u64,
+    /// Whether the source carries transparency. Decides whether AVIF may be
+    /// offered at all — see `profiles::image_options`.
+    pub has_alpha: bool,
 }
 
 /// How hard to compress. PNG is lossless, so it uses `Optimize` instead of the
@@ -55,6 +58,19 @@ impl Compression {
             Compression::Light => 90,
             Compression::Balanced => 80,
             Compression::Strong => 65,
+        }
+    }
+
+    /// AV1 runs on a constant-quality scale where lower is better, so the
+    /// ladder is inverted rather than reused. 18 is visually lossless on
+    /// photographic material; AVIF has no truly lossless rung here, which is
+    /// why `None` still names a real quality instead of pretending otherwise.
+    fn av1_crf(self) -> u8 {
+        match self {
+            Compression::None | Compression::Optimize => 18,
+            Compression::Light => 24,
+            Compression::Balanced => 30,
+            Compression::Strong => 38,
         }
     }
 
@@ -93,6 +109,8 @@ pub fn probe(path: &Path, cancel: &CancelToken) -> Result<ImageProbe> {
         "pixelHeight".into(),
         "-g".into(),
         "format".into(),
+        "-g".into(),
+        "hasAlpha".into(),
         path.to_string_lossy().to_string(),
     ];
     let out = run_capture(Binary::Sips, &args, cancel)?;
@@ -103,6 +121,7 @@ pub fn probe(path: &Path, cancel: &CancelToken) -> Result<ImageProbe> {
     let mut width = None;
     let mut height = None;
     let mut format = None;
+    let mut has_alpha = false;
     for line in out.stdout.lines() {
         let Some((key, value)) = line.split_once(':') else { continue };
         let value = value.trim();
@@ -110,6 +129,7 @@ pub fn probe(path: &Path, cancel: &CancelToken) -> Result<ImageProbe> {
             "pixelWidth" => width = value.parse::<u32>().ok(),
             "pixelHeight" => height = value.parse::<u32>().ok(),
             "format" => format = Some(value.to_string()),
+            "hasAlpha" => has_alpha = value.eq_ignore_ascii_case("yes"),
             _ => {}
         }
     }
@@ -120,6 +140,7 @@ pub fn probe(path: &Path, cancel: &CancelToken) -> Result<ImageProbe> {
             height: h,
             format: format.unwrap_or_else(|| "image".into()),
             size_bytes: std::fs::metadata(path).map(|m| m.len()).unwrap_or(0),
+            has_alpha,
         }),
         // `<nil>` dimensions: the container extension lied, or the file is damaged.
         _ => Err(unreadable(out.log())),
@@ -157,12 +178,21 @@ pub fn build_plan(
     source_format: &str,
     format: OutputFormat,
     compression: Compression,
+    has_alpha: bool,
     work_dir: &Path,
     output: &Path,
 ) -> Result<ImagePlan> {
     if !format.is_image() {
         return Err(ShiftError::new("not_an_image_format", "That output isn't an image format.")
-            .hint("Choose JPG, PNG or WEBP."));
+            .hint("Choose JPG, PNG, WEBP or AVIF."));
+    }
+    // The chip is already withheld for a transparent source, so reaching this
+    // means something bypassed `profiles::image_options`. Refuse rather than
+    // flatten: the bundled libaom-av1 offers no alpha pixel format, so the
+    // transparency would be silently replaced with whatever sat behind it.
+    if format == OutputFormat::Avif && has_alpha {
+        return Err(ShiftError::new("avif_alpha", "AVIF can't keep this image's transparency.")
+            .hint("Choose PNG or WEBP to keep it."));
     }
 
     let src = source_format.to_ascii_lowercase();
@@ -208,6 +238,19 @@ pub fn build_plan(
             }
         }
 
+        // ---- AVIF: FFmpeg only, same two-step decode as WEBP for HEIC. -----
+        OutputFormat::Avif => {
+            if needs_decode {
+                let intermediate = work_dir.join("decoded.png");
+                vec![
+                    ImageStep::Sips(sips_args(input, "png", None, &intermediate)),
+                    ImageStep::Ffmpeg(avif_args(&intermediate, compression.av1_crf(), output)),
+                ]
+            } else {
+                vec![ImageStep::Ffmpeg(avif_args(input, compression.av1_crf(), output))]
+            }
+        }
+
         _ => unreachable!("guarded by is_image above"),
     };
 
@@ -241,6 +284,34 @@ fn webp_args(input: &Path, quality: u8, output: &Path) -> Vec<String> {
         quality.to_string(),
         "-preset".into(),
         "picture".into(),
+        output.to_string_lossy().to_string(),
+    ]
+}
+
+/// AVIF via libaom-av1.
+///
+/// `-cpu-used 6` is not a quality compromise, it is the difference between
+/// usable and not: on a 12 MP photograph libaom's default effort took 19.6s and
+/// produced 1,317,118 bytes, while `-cpu-used 6` took 2.3s and produced
+/// 1,312,226 bytes — 8.6x faster and very slightly *smaller*. `-frames:v 1`
+/// keeps the muxer to a still image rather than a one-frame video.
+fn avif_args(input: &Path, crf: u8, output: &Path) -> Vec<String> {
+    vec![
+        "-hide_banner".into(),
+        "-nostdin".into(),
+        "-y".into(),
+        "-i".into(),
+        input.to_string_lossy().to_string(),
+        "-c:v".into(),
+        "libaom-av1".into(),
+        "-crf".into(),
+        crf.to_string(),
+        "-cpu-used".into(),
+        "6".into(),
+        "-pix_fmt".into(),
+        "yuv420p".into(),
+        "-frames:v".into(),
+        "1".into(),
         output.to_string_lossy().to_string(),
     ]
 }
@@ -280,6 +351,7 @@ mod tests {
             src,
             format,
             c,
+            false,
             Path::new("/work"),
             Path::new("/out.img"),
         )
@@ -359,9 +431,75 @@ mod tests {
             "heic",
             OutputFormat::Mp4,
             Compression::None,
+            false,
             Path::new("/w"),
             Path::new("/o.mp4")
         )
         .is_err());
+    }
+
+    #[test]
+    fn jpg_to_avif_is_a_single_ffmpeg_pass_at_usable_speed() {
+        let p = plan("jpeg", OutputFormat::Avif, Compression::Balanced);
+        assert_eq!(p.steps.len(), 1);
+        let ImageStep::Ffmpeg(args) = &p.steps[0] else { panic!("expected ffmpeg") };
+        assert!(args.iter().any(|a| a == "libaom-av1"));
+        // Without this the encoder is ~8x slower for no size benefit.
+        assert!(args.windows(2).any(|w| w == ["-cpu-used", "6"]));
+        assert!(args.windows(2).any(|w| w == ["-frames:v", "1"]));
+    }
+
+    #[test]
+    fn heic_to_avif_decodes_before_encoding() {
+        let p = plan("heic", OutputFormat::Avif, Compression::Balanced);
+        assert_eq!(p.steps.len(), 2, "HEIC needs a sips decode first");
+        assert!(matches!(p.steps[0], ImageStep::Sips(_)));
+        assert!(matches!(p.steps[1], ImageStep::Ffmpeg(_)));
+    }
+
+    #[test]
+    fn avif_quality_ladder_is_inverted() {
+        // Lower CRF must mean better quality, or the chips would run backwards.
+        let mut last = 0u8;
+        for c in [Compression::None, Compression::Light, Compression::Balanced, Compression::Strong]
+        {
+            let p = plan("jpeg", OutputFormat::Avif, c);
+            let ImageStep::Ffmpeg(args) = &p.steps[0] else { panic!("expected ffmpeg") };
+            let i = args.iter().position(|a| a == "-crf").expect("crf");
+            let crf: u8 = args[i + 1].parse().unwrap();
+            assert!(crf > last, "{c:?} should compress harder than the rung before it");
+            last = crf;
+        }
+    }
+
+    #[test]
+    fn avif_refuses_a_transparent_source_rather_than_flattening_it() {
+        // libaom-av1 in the bundled build advertises no alpha pixel format, so
+        // this must fail loudly instead of quietly discarding transparency.
+        let err = build_plan(
+            Path::new("/in.png"),
+            "png",
+            OutputFormat::Avif,
+            Compression::Balanced,
+            true,
+            Path::new("/w"),
+            Path::new("/o.avif"),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "avif_alpha");
+
+        // The formats that *can* keep it are still allowed.
+        for f in [OutputFormat::Png, OutputFormat::Webp] {
+            assert!(build_plan(
+                Path::new("/in.png"),
+                "png",
+                f,
+                Compression::Balanced,
+                true,
+                Path::new("/w"),
+                Path::new("/o.img"),
+            )
+            .is_ok());
+        }
     }
 }

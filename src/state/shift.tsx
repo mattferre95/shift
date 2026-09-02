@@ -20,8 +20,11 @@ import * as ipc from "@/lib/ipc";
 import { formatTimestamp } from "@/lib/format";
 import {
   compressionOptions,
+  isAnimationFormat,
   isAudioFormat,
+  loopLimit,
   type Compression,
+  type LoopSize,
   type ExportRequest,
   type Health,
   type JobEvent,
@@ -34,8 +37,14 @@ import {
 
 export type Screen = "empty" | "url" | "local" | "processing" | "complete" | "error";
 
-/** Output chips for a remote source (URL-03). */
-const URL_OUTPUTS: OutputFormat[] = ["MP4", "MP3", "WAV"];
+/**
+ * Output chips for a remote source (URL-03).
+ *
+ * FLAC is deliberately absent. Everything a URL provider hands back is already
+ * lossy, so wrapping it losslessly would produce a much larger file holding
+ * exactly the same audio — an honest-looking option that helps nobody.
+ */
+const URL_OUTPUTS: OutputFormat[] = ["MP4", "GIF", "WEBP", "MP3", "M4A", "WAV"];
 
 interface Job {
   id: string;
@@ -60,7 +69,10 @@ interface ShiftState {
   clipOut: string;
   clipError: string | null;
   clipLabel: string | null;
+  /** Length of the current IN/OUT range, so the loop cap can be enforced. */
+  clipSeconds: number | null;
   compression: Compression;
+  loopSize: LoopSize;
   job: Job | null;
   output: JobOutput | null;
   error: ShiftError | null;
@@ -78,8 +90,19 @@ interface ShiftApi extends ShiftState {
   /** Local video only: MP3/WAV selected means "extract the audio". */
   extractAudio: boolean;
   isImage: boolean;
+  /** The source has a moving picture, so loop outputs mean something here. */
+  sourceMoves: boolean;
+  /** The chosen output will be a silent animation from this particular source. */
+  isLoop: boolean;
+  /** The source is longer than a loop may be, so a trim is required. */
+  loopNeedsTrim: boolean;
+  /** What is currently selected would exceed the cap; export is blocked. */
+  loopTooLong: boolean;
+  /** The cap that applies to the format currently chosen. */
+  loopMaxSeconds: number;
   compressionChoices: { id: Compression; label: string }[];
   setCompression: (c: Compression) => void;
+  setLoopSize: (l: LoopSize) => void;
   submitUrl: (raw: string) => void;
   openFilePicker: () => void;
   acceptPaths: (paths: string[]) => void;
@@ -109,7 +132,9 @@ const initial: ShiftState = {
   clipOut: "00:10.000",
   clipError: null,
   clipLabel: null,
+  clipSeconds: null,
   compression: "none",
+  loopSize: "standard",
   job: null,
   output: null,
   error: null,
@@ -210,6 +235,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
             clipOut: formatTimestamp(Math.min(10, media.duration ?? 10)),
             clipError: null,
             clipLabel: null,
+            clipSeconds: null,
             output: null,
             error: null,
           }));
@@ -241,6 +267,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
             clipOut: formatTimestamp(Math.min(10, media.duration ?? 10)),
             clipError: null,
             clipLabel: null,
+            clipSeconds: null,
             output: null,
             error: null,
           }));
@@ -266,10 +293,11 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
       filters: [
         {
           name: "Media",
+          // Kept in step with VIDEO_EXTS / AUDIO_EXTS / IMAGE_EXTS in Rust.
           extensions: [
-            "mp4", "mov", "webm",
-            "mp3", "wav", "m4a", "aac",
-            "heic", "heif", "jpg", "jpeg", "png", "webp",
+            "mp4", "mov", "webm", "mkv", "m4v", "avi",
+            "mp3", "wav", "m4a", "aac", "flac", "aiff", "aif", "ogg", "opus",
+            "heic", "heif", "jpg", "jpeg", "png", "webp", "avif",
           ],
         },
       ],
@@ -295,24 +323,52 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
   const isImage = s.localMedia?.kind === "image";
   const compressionChoices = compressionOptions(s.format);
 
+  // WEBP is a still from a photo and an animation from a video, so the source
+  // has to answer this, never the format alone.
+  const sourceMoves = s.urlMedia?.hasVideo ?? s.localMedia?.hasVideo ?? false;
+  const isLoop = isAnimationFormat(s.format) && sourceMoves && !isImage;
+  // GIF and animated WEBP have different limits, so the format decides.
+  const limit = loopLimit(s.format);
+  const loopMaxSeconds = limit.max;
+  const loopNeedsTrim = isLoop && (duration ?? 0) > limit.max;
+  // What will actually be encoded: the trimmed range if there is one, else all
+  // of it. Checked here so an over-long loop is refused before the Save panel
+  // opens, rather than after the user has already named a file.
+  const loopSeconds = s.clipEnabled ? s.clipSeconds : duration;
+  const loopTooLong = isLoop && (loopSeconds ?? 0) > limit.max + 0.05;
+
   // ---- clip ---------------------------------------------------------------
   useEffect(() => {
     if (!s.clipEnabled) {
-      patch({ clipError: null, clipLabel: null });
+      patch({ clipError: null, clipLabel: null, clipSeconds: null });
       return;
     }
     let live = true;
     ipc
       .validateClip(s.clipIn, s.clipOut, duration)
-      .then((check) => live && patch({ clipError: null, clipLabel: check.label }))
-      .catch((e) => live && patch({ clipError: ipc.toShiftError(e).message, clipLabel: null }));
+      .then(
+        (check) =>
+          live && patch({ clipError: null, clipLabel: check.label, clipSeconds: check.seconds }),
+      )
+      .catch(
+        (e) =>
+          live &&
+          patch({
+            clipError: ipc.toShiftError(e).message,
+            clipLabel: null,
+            clipSeconds: null,
+          }),
+      );
     return () => {
       live = false;
     };
   }, [s.clipEnabled, s.clipIn, s.clipOut, duration, patch]);
 
   const canExport =
-    !s.analyzing && (s.screen === "url" || s.screen === "local") && (!s.clipEnabled || !s.clipError);
+    !s.analyzing &&
+    (s.screen === "url" || s.screen === "local") &&
+    (!s.clipEnabled || !s.clipError) &&
+    !loopTooLong;
 
   // ---- actions ------------------------------------------------------------
   /**
@@ -334,6 +390,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
       clip: s.clipEnabled && !isImage ? { start: s.clipIn, end: s.clipOut } : null,
       outputDir: s.outputDir || null,
       compression: isImage ? s.compression : null,
+      loopSize: isLoop ? s.loopSize : null,
       destinationPath: null,
     };
 
@@ -368,7 +425,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
     } finally {
       setSaving(false);
     }
-  }, [canExport, saving, s.urlMedia, s.localMedia, s.quality, s.format, s.clipEnabled, s.clipIn, s.clipOut, s.outputDir, s.compression, isImage, patch]);
+  }, [canExport, saving, s.urlMedia, s.localMedia, s.quality, s.format, s.clipEnabled, s.clipIn, s.clipOut, s.outputDir, s.compression, s.loopSize, isImage, isLoop, patch]);
 
   const cancel = useCallback(() => {
     const id = s.job?.id ?? jobRef.current;
@@ -406,6 +463,11 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
     saving,
     extractAudio,
     isImage,
+    sourceMoves,
+    isLoop,
+    loopNeedsTrim,
+    loopTooLong,
+    loopMaxSeconds,
     compressionChoices,
     submitUrl,
     openFilePicker,
@@ -416,13 +478,34 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
         // The compression ladder differs per format; drop a level the new
         // format does not offer rather than silently sending it.
         const allowed = compressionOptions(f).map((o) => o.id);
-        return {
+        const next: ShiftState = {
           ...prev,
           format: f,
           compression: allowed.includes(prev.compression) ? prev.compression : "none",
         };
+
+        // Picking a loop on a source longer than its cap turns the trim on and
+        // proposes a range, rather than letting the user walk into a refusal.
+        // It happens in plain sight — the toggle flips and the fields appear —
+        // and nothing stops them changing or switching it back off.
+        //
+        // This also re-arms when moving *between* loop formats, because the
+        // limits differ: a 20s range is a fine WEBP and too long as a GIF, and
+        // leaving it would strand the user on a disabled Export button.
+        const willLoop = isAnimationFormat(f) && sourceMoves && !isImage;
+        if (willLoop) {
+          const lim = loopLimit(f);
+          const current = prev.clipEnabled ? (prev.clipSeconds ?? 0) : (duration ?? 0);
+          if (current > lim.max) {
+            next.clipEnabled = true;
+            next.clipIn = "00:00.000";
+            next.clipOut = formatTimestamp(Math.min(lim.default, duration ?? lim.default));
+          }
+        }
+        return next;
       }),
     setCompression: (c) => patch({ compression: c }),
+    setLoopSize: (l) => patch({ loopSize: l }),
     setQuality: (q) => patch({ quality: q }),
     toggleClip: () => set((prev) => ({ ...prev, clipEnabled: !prev.clipEnabled })),
     setClipIn: (v) => patch({ clipIn: v }),

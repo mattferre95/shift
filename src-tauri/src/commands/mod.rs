@@ -15,9 +15,15 @@ use crate::validation;
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
 
-/// Local file extensions accepted in V1 (LOC-01).
-const VIDEO_EXTS: [&str; 3] = ["mp4", "mov", "webm"];
-const AUDIO_EXTS: [&str; 4] = ["mp3", "wav", "m4a", "aac"];
+/// Local file extensions accepted (LOC-01).
+///
+/// Wider than the output list on purpose: ffprobe and FFmpeg already demux all
+/// of these, and what a file can be *turned into* is decided by its streams in
+/// `profiles::options_for`, never by its extension. Refusing to read a MKV that
+/// FFmpeg handles perfectly would be an artificial limit.
+const VIDEO_EXTS: [&str; 6] = ["mp4", "mov", "webm", "mkv", "m4v", "avi"];
+const AUDIO_EXTS: [&str; 9] =
+    ["mp3", "wav", "m4a", "aac", "flac", "aiff", "aif", "ogg", "opus"];
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -35,6 +41,9 @@ pub struct LocalMedia {
     pub has_video: bool,
     /// Output chips this file can actually produce.
     pub outputs: Vec<String>,
+    /// Images only: whether the source carries transparency. The UI uses it to
+    /// explain why AVIF is not on offer.
+    pub has_alpha: bool,
 }
 
 #[tauri::command]
@@ -80,7 +89,11 @@ pub async fn analyze_file(path: String) -> Result<LocalMedia> {
                 width: Some(info.width),
                 height: Some(info.height),
                 has_video: false,
-                outputs: profiles::image_options().iter().map(|f| f.label().to_string()).collect(),
+                outputs: profiles::image_options(info.has_alpha)
+                    .iter()
+                    .map(|f| f.label().to_string())
+                    .collect(),
+                has_alpha: info.has_alpha,
             });
         }
 
@@ -101,6 +114,7 @@ pub async fn analyze_file(path: String) -> Result<LocalMedia> {
             height: info.video.as_ref().and_then(|v| v.height),
             has_video: info.has_video(),
             outputs: profiles::options_for(&info).iter().map(|f| f.label().to_string()).collect(),
+            has_alpha: false,
         })
     })
     .await

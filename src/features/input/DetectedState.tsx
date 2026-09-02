@@ -4,6 +4,7 @@ import { TimeField } from "@/components/TimeField";
 import { Toggle } from "@/components/Toggle";
 import { formatBytes, formatDuration, parseTimestamp, resolutionLabel } from "@/lib/format";
 import { useShift } from "@/state/shift";
+import { isAnimationFormat, isAudioFormat, LOOP_SIZES, type OutputFormat } from "@/types";
 
 /**
  * States B and C in one layout, exactly as the design composes them: identity
@@ -71,12 +72,10 @@ export function DetectedState() {
       {/* ---- actions ------------------------------------------------------ */}
       <div className="flex flex-col gap-[22px] overflow-y-auto">
         <Section title="OUTPUT">
-          <div className="flex flex-wrap gap-2">
-            {s.outputs.map((f) => (
-              <Chip key={f} label={f} selected={s.format === f} onClick={() => s.setFormat(f)} />
-            ))}
-          </div>
+          <OutputChips />
         </Section>
+
+        {s.isLoop && <LoopSection />}
 
         {s.showQuality && (
           <Section title="QUALITY">
@@ -116,6 +115,11 @@ export function DetectedState() {
             {s.format === "PNG" && (
               <div className="mt-[10px] text-[11px] text-shift-ghost">
                 PNG is lossless — Optimize only recompresses, it never changes the image.
+              </div>
+            )}
+            {s.localMedia?.hasAlpha && (
+              <div className="mt-[10px] text-[11px] text-shift-ghost">
+                This image has transparency, so AVIF isn't offered — it can't carry it.
               </div>
             )}
           </Section>
@@ -169,6 +173,95 @@ export function DetectedState() {
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * The output chips, grouped by what the user is actually trying to do.
+ *
+ * A video can legitimately become nine different things, which is a lot of
+ * identical pills to scan when nothing marks where "keep it moving" ends and
+ * "just take the audio" begins. The chips are the same and the row is still
+ * one row — only the spacing carries the grouping, so it reads as three short
+ * runs rather than a wall. Everything on offer is still on offer: this is not a
+ * dropdown, and nothing is hidden behind a disclosure.
+ *
+ * A photo's four outputs and an audio file's five need no such help, so they
+ * stay a single flat run.
+ */
+function OutputChips() {
+  const s = useShift();
+  const chip = (f: OutputFormat) => (
+    <Chip key={f} label={f} selected={s.format === f} onClick={() => s.setFormat(f)} />
+  );
+
+  if (!s.sourceMoves) {
+    return <div className="flex flex-wrap gap-2">{s.outputs.map(chip)}</div>;
+  }
+
+  // Only a moving source has all three kinds, so only it needs the grouping.
+  const groups: OutputFormat[][] = [
+    s.outputs.filter((f) => !isAudioFormat(f) && !isAnimationFormat(f)),
+    s.outputs.filter((f) => isAnimationFormat(f)),
+    s.outputs.filter((f) => isAudioFormat(f)),
+  ].filter((g) => g.length > 0);
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-[18px] gap-y-2">
+      {groups.map((group) => (
+        <div key={group.join()} className="flex flex-wrap gap-2">
+          {group.map(chip)}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * The controls that only make sense once an output is a moving one.
+ *
+ * Deliberately a size, not a frame rate and a width: the two move together,
+ * and the rates behind them are chosen so GIF's centisecond frame delays come
+ * out uniform. Exposing them separately would let someone pick 15 fps, which
+ * GIF cannot actually store.
+ */
+function LoopSection() {
+  const s = useShift();
+  const detail = LOOP_SIZES.find((l) => l.id === s.loopSize)?.detail;
+  const name = s.format === "GIF" ? "GIF" : "Animated WEBP";
+  // Why, not just what — the limit is a file-size consequence, not a rule.
+  const reason =
+    s.format === "GIF"
+      ? "every frame is a whole image, so length becomes file size"
+      : "long loops get large";
+
+  return (
+    <Section title="LOOP">
+      <div className="flex flex-wrap gap-2">
+        {LOOP_SIZES.map((l) => (
+          <Chip
+            key={l.id}
+            label={l.label}
+            selected={s.loopSize === l.id}
+            onClick={() => s.setLoopSize(l.id)}
+          />
+        ))}
+      </div>
+      <div className="mt-[10px] text-[11px] text-shift-ghost">
+        {detail} · silent · loops forever. Never upscaled past the source.
+      </div>
+      {s.loopTooLong ? (
+        <div className="mt-[6px] text-[11px] text-shift-danger">
+          {name} is limited to {s.loopMaxSeconds} seconds — {reason}. Trim to fit.
+        </div>
+      ) : (
+        s.loopNeedsTrim && (
+          <div className="mt-[6px] text-[11px] text-shift-ghost">
+            Trimmed to fit {name}'s {s.loopMaxSeconds}s limit — {reason}. Adjust the range below.
+          </div>
+        )
+      )}
+    </Section>
   );
 }
 
