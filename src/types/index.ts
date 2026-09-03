@@ -18,6 +18,13 @@ export const isAudioFormat = (f: OutputFormat) => AUDIO_FORMATS.includes(f);
 export const isImageFormat = (f: OutputFormat) => IMAGE_FORMATS.includes(f);
 export const isAnimationFormat = (f: OutputFormat) => ANIMATION_FORMATS.includes(f);
 
+/**
+ * Formats that can carry an alpha channel, and so are padded with nothing
+ * rather than with black. Mirrors `image::keeps_alpha`; it applies to stills
+ * only, since a video source has no transparency to preserve.
+ */
+export const keepsAlpha = (f: OutputFormat) => f === "PNG" || f === "WEBP";
+
 /** Mirrors `profiles::LoopSize`. */
 export type LoopSize = "small" | "standard" | "large";
 
@@ -48,6 +55,62 @@ export const LOOP_SIZES: { id: LoopSize; label: string; detail: string }[] = [
   { id: "standard", label: "Standard", detail: "480 px · 12.5 fps" },
   { id: "large", label: "Large", detail: "640 px · 20 fps" },
 ];
+
+// ------------------------------------------------------------------ aspect
+
+/** Mirrors `aspect::AspectRatio`. */
+export type AspectRatio = "original" | "freeform" | "16:9" | "9:16" | "1:1" | "4:5" | "4:3";
+
+/** Mirrors `aspect::FrameMode`. */
+export type FrameMode = "fill" | "fit";
+
+/** Mirrors `aspect::AspectSpec`. */
+export interface AspectSpec {
+  ratio: AspectRatio;
+  frame: FrameMode;
+  width: number | null;
+  height: number | null;
+}
+
+export const ASPECT_DEFAULT: AspectSpec = {
+  ratio: "original",
+  frame: "fill",
+  width: null,
+  height: null,
+};
+
+/**
+ * Laid out the way the design groups them: the two modes that are not a fixed
+ * ratio on their own, then the ratios two to a row.
+ */
+export const ASPECT_ROWS: AspectRatio[][] = [
+  ["original"],
+  ["freeform"],
+  ["16:9", "9:16"],
+  ["1:1", "4:5"],
+  ["4:3"],
+];
+
+export const aspectLabel = (r: AspectRatio) =>
+  r === "original" ? "Original" : r === "freeform" ? "Freeform" : r;
+
+/** Mirrors `aspect::MIN_DIMENSION` / `MAX_DIMENSION`. */
+export const MIN_DIMENSION = 16;
+export const MAX_DIMENSION = 8192;
+
+/**
+ * What an aspect choice would produce, as answered by `aspect_preview`.
+ *
+ * Deliberately not recomputed here: the geometry has one implementation, in
+ * `media::aspect`, and the number on screen is the one the export will use.
+ * `null` means there is nothing to show yet — Original, or a source whose size
+ * is not known (a URL before it is fetched).
+ */
+export interface AspectPreview {
+  width: number;
+  height: number;
+  upscales: boolean;
+}
 
 /** Mirrors `media::image::Compression`. */
 export type Compression = "none" | "light" | "balanced" | "strong" | "optimize";
@@ -170,6 +233,8 @@ export interface ExportRequest {
   compression: Compression | null;
   /** GIF and animated WEBP only; ignored by every other output. */
   loopSize: LoopSize | null;
+  /** Visual outputs only; ignored by audio, which has no shape. */
+  aspect: AspectSpec | null;
   /** Full path chosen in the native Save panel. */
   destinationPath: string | null;
 }

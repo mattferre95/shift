@@ -34,6 +34,7 @@ pub fn run() {
             commands::analyze_url,
             commands::analyze_file,
             commands::validate_clip,
+            commands::aspect_preview,
             commands::start_export,
             commands::save_prompt,
             commands::cancel_job,

@@ -39,6 +39,22 @@ Sidecars are not committed. `npm run sidecars` is required before the first buil
   `types/index.ts`; change both together.
 - **An audio stream is only copied when the result means the same thing.**
   See `audio_copy_is_faithful`. Legal-in-container is not the test.
+- **Shape lives in `media::aspect` and nowhere else.** Ratios, Fill/Fit and
+  freeform sizes resolve to a `Reframe`; the pipelines turn it into filters and
+  never do the arithmetic themselves.
+- **A ratio change is a crop or a pad.** Both axes always scale by the same
+  factor. There is no Stretch, and there must never be a code path that could
+  behave like one.
+- **Only Freeform may enlarge.** Preset ratios are derived from the source's own
+  pixels, so they can only discard. A freeform upscale sets `upscales` and the
+  UI says so before the export.
+- **Fit's padding colour follows the target.** PNG and WEBP pad transparently,
+  JPEG and AVIF pad black, video always pads black. `black@0` without a
+  preceding `format=rgba` is silently written as opaque black.
+- **Every resample is followed by `setsar=1`,** or the result is displayed
+  slightly stretched.
+- **The frontend never recomputes aspect arithmetic.** It asks
+  `aspect_preview`, so the dimensions shown are the dimensions produced.
 - **yt-dlp is one provider behind `providers::UrlProvider`**, not a hardcoded
   dependency.
 - **Never invent progress.** Report a percentage only when the native layer has
@@ -64,7 +80,9 @@ Both look like "the app hangs with no child process in `ps`":
 Supported today: URL download with optional clipping, exporting
 MP4/GIF/WEBP/MP3/WAV; local video and audio conversion, trimming and audio
 extraction across MP4/MOV/WEBM and MP3/M4A/WAV/FLAC; silent looping export to
-GIF (max 15s) and animated WEBP (max 30s); and image conversion from
+GIF (max 15s) and animated WEBP (max 30s); aspect reframing of any visual output
+by ratio or exact size, cropping or padding but never stretching; and image
+conversion from
 HEIC/HEIF/JPG/PNG/WEBP/AVIF to JPG/PNG/WEBP/AVIF with optional compression.
 Reads more containers than it writes — MKV, M4V, AVI, AIFF, OGG and Opus
 included. Every export is named and placed through the native Save panel.

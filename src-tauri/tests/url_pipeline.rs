@@ -9,6 +9,7 @@
 
 use shift_lib::media::ffmpeg;
 use shift_lib::media::ffprobe;
+use shift_lib::media::aspect::AspectSpec;
 use shift_lib::media::profiles::{build_plan, LoopSize, OutputFormat};
 use shift_lib::process::CancelToken;
 use shift_lib::providers::{self, DownloadKind};
@@ -104,7 +105,7 @@ fn downloads_then_clips_to_mp3() {
     // file can, which is exactly what the job runner does before encoding.
     let clip = ClipRange { start: 1.0, end: 4.0 };
     let out = dir.join("clip.mp3");
-    let plan = build_plan(&downloaded, &probe, OutputFormat::Mp3, Some(clip), LoopSize::default(), &out).unwrap();
+    let plan = build_plan(&downloaded, &probe, OutputFormat::Mp3, Some(clip), LoopSize::default(), &AspectSpec::default(), &out).unwrap();
     ffmpeg::execute(&plan, Some(clip.duration()), &cancel, &mut |_| {}).unwrap();
 
     let result = ffprobe::probe(&out, &cancel).unwrap();
@@ -150,7 +151,7 @@ fn downloads_then_exports_m4a() {
     let probe = ffprobe::probe(&downloaded, &cancel).unwrap();
     let out = dir.join("url.m4a");
     let plan =
-        build_plan(&downloaded, &probe, OutputFormat::M4a, None, LoopSize::default(), &out).unwrap();
+        build_plan(&downloaded, &probe, OutputFormat::M4a, None, LoopSize::default(), &AspectSpec::default(), &out).unwrap();
     ffmpeg::execute(&plan, probe.duration, &cancel, &mut |_| {}).unwrap();
 
     let result = ffprobe::probe(&out, &cancel).unwrap();

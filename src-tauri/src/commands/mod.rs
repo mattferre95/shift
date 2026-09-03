@@ -1,12 +1,14 @@
 //! The complete IPC surface.
 //!
-//! Nine narrow commands. None of them accept a flag, an argument array, or a
+//! A dozen narrow commands. None of them accept a flag, an argument array, or a
 //! shell string — the frontend can only describe *what* it wants (PRD §9).
 
 use crate::errors::{Result, ShiftError};
 use crate::filesystem;
 use crate::jobs::{self, ExportRequest, JobRegistry};
+use crate::media::aspect::{self, AspectSpec};
 use crate::media::image;
+use crate::media::profiles::LoopSize;
 use crate::media::{ffprobe::probe, profiles};
 use crate::process::CancelToken;
 use crate::providers::{self, UrlMedia};
@@ -119,6 +121,55 @@ pub async fn analyze_file(path: String) -> Result<LocalMedia> {
     })
     .await
     .map_err(|e| ShiftError::new("internal", "SHIFT couldn't read that file.").technical(e.to_string()))?
+}
+
+/// What an aspect choice would actually produce.
+///
+/// The UI shows this beside the ratio chips. It is answered here rather than
+/// recomputed in the frontend so the numbers on screen are the same ones the
+/// export will use — there is one implementation of this arithmetic, and it is
+/// `media::aspect`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AspectPreview {
+    pub width: u32,
+    pub height: u32,
+    /// True when the request enlarges the source, which only Freeform can do.
+    pub upscales: bool,
+}
+
+/// `None` when there is nothing to show: Original, an unknown source size (a
+/// URL before it is fetched), or a request that is not valid yet.
+/// `loop_size` is passed when the output is a GIF or animated WEBP, because the
+/// preset then caps the result — a 9:16 crop of a 1280x720 clip is 404x720 as a
+/// video and 268x480 as a Standard loop, and the label has to show the number
+/// the file will actually have.
+#[tauri::command]
+pub fn aspect_preview(
+    source_width: u32,
+    source_height: u32,
+    spec: AspectSpec,
+    loop_size: Option<LoopSize>,
+) -> Option<AspectPreview> {
+    if spec.is_original() || source_width == 0 || source_height == 0 {
+        return None;
+    }
+    let source = (source_width, source_height);
+    let reframe = match aspect::resolve(source, &spec) {
+        Ok(Some(r)) => r,
+        // A ratio the source already has: nothing changes, but the loop preset
+        // may still resize it.
+        Ok(None) => aspect::identity(source),
+        // Half-typed dimensions are not an error worth shouting about; the
+        // label simply waits until there is something to say.
+        Err(_) => return None,
+    };
+    let framed = match loop_size {
+        Some(size) => reframe.capped(size.longest_edge()),
+        None => reframe,
+    };
+    let (width, height) = framed.final_size();
+    Some(AspectPreview { width, height, upscales: reframe.upscales })
 }
 
 #[derive(Debug, Clone, Serialize)]

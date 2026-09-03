@@ -28,6 +28,7 @@ or a shell string. Ten commands make up the entire IPC surface
 | `process` | Binary resolution, spawning, cancellation. The only place a child process is created. |
 | `providers` | URL sources behind `UrlProvider`. yt-dlp is the first implementation, not the interface. |
 | `media::ffprobe` | The single source of truth about a file's streams. |
+| `media::aspect` | Shape: ratios, Fill/Fit, freeform sizes, and the filter chain each implies. The only place that arithmetic happens. |
 | `media::profiles` | Every codec and container decision, including the loop presets. Nothing else builds FFmpeg arguments. |
 | `media::ffmpeg` | Running a plan and normalizing its progress. |
 | `jobs` | The state machine, the registry, and the pipeline runner. |
@@ -126,6 +127,59 @@ decided by its streams in `profiles::options_for`, never by its extension.
 Refusing to read a container FFmpeg handles perfectly would be an artificial
 limit.
 
+**A ratio change is a crop or a pad, never a stretch.** `media::aspect` resolves
+a request against the source's real dimensions and returns a `Reframe`: an
+optional resample, a canvas, and which of crop or pad joins them. There is no
+Stretch mode to select because there is no code path that could produce one —
+both axes always move by the same factor, and a test asserts it across every
+ratio and source shape.
+
+**A preset ratio can only ever discard.** The canvas is derived from the
+source's own pixels, so Fill on 1920x1080 to 9:16 is a 608x1080 crop rather than
+an invented 1080x1920. Only Freeform can enlarge, because only there has the
+user named an exact size — and it reports `upscales` so the UI can say so before
+the export rather than after.
+
+**Fit is held to the source's longest edge.** Padding 16:9 into 9:16 at native
+size would be a 1920x3413 canvas: correct, absurd, and expensive. The canvas
+instead takes the source's longest edge and the picture shrinks to sit inside
+it, so a 1080p clip letterboxes to a sane 1080x1920.
+
+**Crop before scale, scale before palette.** `Reframe::capped` puts a pure crop
+at full resolution and the resize after it, because shrinking pixels that are
+about to be discarded is wasted work; where a resample already exists the cap is
+folded into it rather than adding a second one. In a loop the whole reframe runs
+after `fps` and before `palettegen`, so the expensive pass only ever sees pixels
+that survive into the finished file.
+
+**A loop preset caps the longest edge, not the width.** Once reframing makes
+portrait loops ordinary, a width-only cap would let a 9:16 GIF carry three times
+the pixels of a 16:9 one at the same preset — and the length limits are
+calibrated on weight.
+
+**Images reframe through the existing conversion, not around it.** The transform
+runs as its own lossless PNG pass; the format's own encoder then does the
+encoding with the quality ladder it already had. One conversion path, not two.
+
+**Fit pads with nothing where the format can hold nothing.** PNG and WEBP get
+transparent bars, JPEG and AVIF get black, and video always gets black. The
+colour is not cosmetic: asked to pad with `black@0` on a frame that has no alpha
+channel, FFmpeg drops the transparency and writes opaque black without
+complaint, so `filters_with` emits `format=rgba` ahead of the pad and the image
+pass forces an rgba intermediate. Either way the *source's* own transparency is
+untouched — the picture and its bars are separate questions.
+
+**A resample pins the pixels square.** FFmpeg's `scale` rewrites the sample
+aspect ratio to preserve the display aspect it believes it is changing, which
+leaves a reframed video with non-square pixels a player then stretches back —
+a quarter of a percent, but a stretch. Every scale is followed by `setsar=1`.
+
+**The dimensions on screen come from the same code as the export.**
+`aspect_preview` is a command rather than a second implementation in TypeScript,
+and it takes the loop preset too: a 9:16 crop of a 1280x720 clip is 404x720 as a
+video and 268x480 as a Standard GIF, and the label has to show the one the file
+will actually have.
+
 **Cancellation kills a process group, not a process.** yt-dlp spawns its own
 children. Each job owns one `CancelToken`; the child is spawned into its own
 process group and cancel sends `SIGTERM` to the whole group.
@@ -182,8 +236,8 @@ Still open before public distribution:
 
 ## Future work
 
-Post-V1, in the PRD's order: resize/crop, local history, batch jobs, reusable
-presets, a multi-action chain editor.
+Post-V1, in the PRD's order: local history, batch jobs, reusable presets, a
+multi-action chain editor.
 Deliberately not built yet: APNG (rarely needed next to animated WebP), ProRes
 and MKV output (real but narrow audiences), Opus as a separate chip (M4A/AAC
 already covers lossy delivery), and AV1 video output (encode times do not suit

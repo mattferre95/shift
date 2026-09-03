@@ -4,6 +4,7 @@
 //! extending this module, not scattering flags through the codebase.
 
 use crate::errors::{Result, ShiftError};
+use crate::media::aspect::{self, AspectSpec, Reframe};
 use crate::media::ffprobe::MediaProbe;
 use crate::validation::ClipRange;
 use serde::{Deserialize, Serialize};
@@ -206,7 +207,12 @@ impl Default for LoopSize {
 
 impl LoopSize {
     /// Longest edge in pixels. A smaller source is never scaled up.
-    pub fn width(self) -> u32 {
+    ///
+    /// Longest edge rather than width, because a reframe makes portrait loops
+    /// ordinary: capping only the width would let a 9:16 GIF carry three times
+    /// the pixels of a 16:9 one at the same preset, and the length limits are
+    /// calibrated on weight.
+    pub fn longest_edge(self) -> u32 {
         match self {
             LoopSize::Small => 320,
             LoopSize::Standard => 480,
@@ -235,6 +241,16 @@ impl LoopSize {
 
 pub fn loop_options() -> Vec<LoopSize> {
     vec![LoopSize::Small, LoopSize::Standard, LoopSize::Large]
+}
+
+/// The source's pixel dimensions, or `(0, 0)` when ffprobe could not report
+/// them — which `aspect::resolve` turns into a clean refusal for every mode
+/// that needs them.
+fn source_size(probe: &MediaProbe) -> (u32, u32) {
+    match probe.video.as_ref() {
+        Some(v) => (v.width.unwrap_or(0), v.height.unwrap_or(0)),
+        None => (0, 0),
+    }
 }
 
 // -------------------------------------------------------- container fitness
@@ -310,6 +326,7 @@ pub fn build_plan(
     format: OutputFormat,
     clip: Option<ClipRange>,
     loop_size: LoopSize,
+    aspect_spec: &AspectSpec,
     output: &Path,
 ) -> Result<EncodePlan> {
     if format.is_audio_only() && probe.audio.is_none() {
@@ -322,8 +339,16 @@ pub fn build_plan(
     }
     // A moving source asked for a moving silent format: GIF, or WEBP standing
     // in for animated WebP. Checked before `is_image`, because WEBP is both.
+    // Sound has no shape, so an audio export ignores the aspect entirely rather
+    // than failing on a request that cannot mean anything.
+    let reframe = if format.is_audio_only() {
+        None
+    } else {
+        aspect::resolve(source_size(probe), aspect_spec)?
+    };
+
     if format.is_animation() {
-        return build_loop_plan(input, probe, format, clip, loop_size, output);
+        return build_loop_plan(input, probe, format, clip, loop_size, reframe, output);
     }
     if format.is_image() {
         return Err(ShiftError::new("image_from_av", "That output is an image format.")
@@ -367,7 +392,8 @@ pub fn build_plan(
     } else {
         let v_src = probe.video.as_ref().map(|v| v.codec.as_str()).unwrap_or("");
         let a_src = probe.audio.as_ref().map(|a| a.codec.as_str()).unwrap_or("");
-        let can_copy_video = !trimming && video_codec_fits(format, v_src);
+        // A reframe rewrites every pixel, so there is nothing left to copy.
+        let can_copy_video = !trimming && reframe.is_none() && video_codec_fits(format, v_src);
         let can_copy_audio = probe.audio.is_none() || (!trimming && audio_codec_fits(format, a_src));
 
         if can_copy_video && can_copy_audio {
@@ -375,6 +401,10 @@ pub fn build_plan(
             args.push("copy".into());
             remuxed = true;
         } else {
+            if let Some(chain) = reframe.map(|r| r.filters().join(",")).filter(|c| !c.is_empty()) {
+                args.push("-vf".into());
+                args.push(chain);
+            }
             args.extend(video_encoder(format));
             if probe.audio.is_some() {
                 if can_copy_audio {
@@ -425,6 +455,7 @@ fn build_loop_plan(
     format: OutputFormat,
     clip: Option<ClipRange>,
     loop_size: LoopSize,
+    reframe: Option<Reframe>,
     output: &Path,
 ) -> Result<EncodePlan> {
     let limit = format.max_loop_seconds().unwrap_or(MAX_GIF_SECONDS);
@@ -457,16 +488,31 @@ fn build_loop_plan(
     // left for FFmpeg to discard with a warning.
     args.push("-an".into());
 
-    // `min(iw,W)` caps the width without ever scaling a small source up, and
-    // `-2` keeps the height even, which the WebP encoder requires. The single
-    // quotes are for FFmpeg's own filtergraph parser: without them the comma
-    // inside `min()` would read as the end of the filter. No shell is involved
-    // — this whole array is passed to `execvp` as-is.
-    let chain = format!(
-        "fps={},scale=w='min(iw,{})':h=-2:flags=lanczos",
-        loop_size.fps(),
-        loop_size.width()
-    );
+    // `fps` comes first so frames are dropped before any per-pixel work, and
+    // the reframe comes next so the palette pass — by far the expensive stage —
+    // only ever sees pixels that survive into the finished loop.
+    //
+    // When the source's size is known the whole thing is computed here and
+    // emitted as concrete numbers: the preset's cap has to apply to the shape
+    // *after* the reframe, which an `iw`-based expression cannot know.
+    let size = source_size(probe);
+    let chain = if size.0 > 0 && size.1 > 0 {
+        let framed = reframe.unwrap_or_else(|| aspect::identity(size));
+        let mut parts = vec![format!("fps={}", loop_size.fps())];
+        parts.extend(framed.capped(loop_size.longest_edge()).filters());
+        parts.join(",")
+    } else {
+        // ffprobe could not report a size. `min(iw,W)` still caps without ever
+        // enlarging, and `-2` keeps the height even for the WebP encoder. The
+        // single quotes are for FFmpeg's filtergraph parser — without them the
+        // comma inside `min()` would read as the end of the filter. No shell is
+        // involved; this array goes to `execvp` as-is.
+        format!(
+            "fps={},scale=w='min(iw,{})':h=-2:flags=lanczos",
+            loop_size.fps(),
+            loop_size.longest_edge()
+        )
+    };
 
     match format {
         OutputFormat::Gif => {
@@ -569,7 +615,15 @@ mod tests {
         format: OutputFormat,
         clip: Option<ClipRange>,
     ) -> Result<EncodePlan> {
-        build_plan(Path::new("/in.mov"), probe, format, clip, LoopSize::default(), Path::new("/out"))
+        build_plan(
+            Path::new("/in.mov"),
+            probe,
+            format,
+            clip,
+            LoopSize::default(),
+            &AspectSpec::default(),
+            Path::new("/out"),
+        )
     }
 
     fn h264_mov() -> MediaProbe {
@@ -661,12 +715,63 @@ mod tests {
     }
 
     #[test]
-    fn a_loop_never_upscales_a_small_source() {
+    fn a_loop_sizes_itself_from_the_source_and_never_upscales() {
+        // 1920x1080 capped at the Standard preset's 480 longest edge.
         let args = args_of(OutputFormat::Gif, Some(ClipRange { start: 0.0, end: 4.0 }));
         let graph = args.iter().find(|a| a.contains("scale=")).expect("scale");
-        assert!(graph.contains("min(iw,480)"), "width must be a cap, not a target: {graph}");
-        // -2 keeps the height even, which libwebp_anim requires.
-        assert!(graph.contains("h=-2"));
+        assert!(graph.contains("scale=480:270"), "{graph}");
+
+        // A source already smaller than the preset is left alone entirely.
+        let small = MediaProbe {
+            video: Some(StreamInfo { codec: "h264".into(), width: Some(200), height: Some(120) }),
+            ..h264_mov()
+        };
+        let plan = plan(&small, OutputFormat::Gif, Some(ClipRange { start: 0.0, end: 4.0 })).unwrap();
+        let graph = plan.args.iter().find(|a| a.contains("fps=")).expect("chain");
+        assert!(!graph.contains("scale="), "a 200px source needs no scaling: {graph}");
+    }
+
+    #[test]
+    fn a_loop_caps_the_longest_edge_not_the_width() {
+        // A portrait source must not come out three times the pixels of a
+        // landscape one at the same preset — the length limits assume weight.
+        let portrait = MediaProbe {
+            video: Some(StreamInfo { codec: "h264".into(), width: Some(1080), height: Some(1920) }),
+            ..h264_mov()
+        };
+        let plan =
+            plan(&portrait, OutputFormat::Gif, Some(ClipRange { start: 0.0, end: 4.0 })).unwrap();
+        let graph = plan.args.iter().find(|a| a.contains("scale=")).expect("scale");
+        assert!(graph.contains("scale=270:480"), "{graph}");
+    }
+
+    #[test]
+    fn a_loop_reframes_before_it_builds_a_palette() {
+        // Cropping after palettegen would spend the expensive pass on pixels
+        // that get thrown away.
+        let spec = AspectSpec {
+            ratio: aspect::AspectRatio::R1x1,
+            frame: aspect::FrameMode::Fill,
+            width: None,
+            height: None,
+        };
+        let plan = build_plan(
+            Path::new("/in.mov"),
+            &h264_mov(),
+            OutputFormat::Gif,
+            Some(ClipRange { start: 0.0, end: 4.0 }),
+            LoopSize::default(),
+            &spec,
+            Path::new("/out.gif"),
+        )
+        .unwrap();
+        let graph = plan.args.iter().find(|a| a.contains("palettegen")).expect("graph");
+        let crop = graph.find("crop=").expect("a crop");
+        let palette = graph.find("palettegen").expect("palettegen");
+        assert!(crop < palette, "crop must precede palettegen: {graph}");
+        // And the square canvas is capped on its longest edge.
+        assert!(graph.contains("crop=1080:1080"), "{graph}");
+        assert!(graph.contains("scale=480:480"), "{graph}");
     }
 
     #[test]

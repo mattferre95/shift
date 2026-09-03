@@ -7,6 +7,7 @@
 
 use crate::errors::{Result, ShiftError};
 use crate::filesystem::{self, TempDir};
+use crate::media::aspect::{AspectRatio, AspectSpec, FrameMode};
 use crate::media::image::{self, Compression};
 use crate::media::{ffmpeg, ffprobe, profiles::{self, LoopSize, OutputFormat}};
 use crate::process::{Binary, CancelToken};
@@ -47,6 +48,7 @@ pub enum ActionSpec {
     ConvertImage { format: OutputFormat },
     CompressImage { level: Compression },
     MakeLoop { format: OutputFormat, size: LoopSize },
+    Reframe { ratio: AspectRatio, frame: FrameMode },
 }
 
 // ------------------------------------------------------------------- request
@@ -79,6 +81,9 @@ pub struct ExportRequest {
     /// GIF and animated WEBP only. Ignored by every other output.
     #[serde(default)]
     pub loop_size: Option<LoopSize>,
+    /// Visual outputs only. Ignored by audio, which has no shape.
+    #[serde(default)]
+    pub aspect: Option<AspectSpec>,
     /// Full path chosen in the native Save panel. When present the user has
     /// already named the file and confirmed any overwrite, so SHIFT writes
     /// exactly there instead of inventing a collision-safe name.
@@ -245,6 +250,11 @@ fn plan_actions(request: &ExportRequest, clip: Option<ClipRange>) -> (Vec<Action
         }
     }
 
+    let aspect = request.aspect.unwrap_or_default();
+    if !aspect.is_original() && !request.format.is_audio_only() {
+        actions.push(ActionSpec::Reframe { ratio: aspect.ratio, frame: aspect.frame });
+    }
+
     if request.format.is_animation() {
         // A loop is one pass whether or not it is also trimmed, so the trim
         // does not get a stage of its own the way it does elsewhere.
@@ -364,6 +374,7 @@ mod tests {
             output_dir: None,
             compression: None,
             loop_size: None,
+            aspect: None,
             destination_path: None,
         }
     }
@@ -398,6 +409,7 @@ mod tests {
             output_dir: None,
             compression: None,
             loop_size: None,
+            aspect: None,
             destination_path: None,
         };
         assert_eq!(suggested_filename(&r, "The Sopranos"), "The-Sopranos-02m52s-02m56s.mp3");
@@ -563,6 +575,7 @@ fn execute(
         request.format,
         clip,
         request.loop_size.unwrap_or_default(),
+        &request.aspect.unwrap_or_default(),
         &temp_output,
     )?;
 
@@ -660,18 +673,25 @@ fn execute_image(
         request.format,
         compression,
         probe.has_alpha,
+        (probe.width, probe.height),
+        &request.aspect.unwrap_or_default(),
         &work_dir,
         &temp_output,
     )?;
 
-    // The stage list mirrors the plan: a second pass only appears when one is
-    // genuinely run.
-    let mut actions = vec![ActionSpec::Analyze, ActionSpec::ConvertImage { format: request.format }];
-    let mut stages: Vec<String> = vec!["Reading image…".into(), "Converting…".into()];
+    // The stage list comes straight from the plan, so it describes the passes
+    // that actually run rather than guessing from how many there are.
+    let mut actions = vec![ActionSpec::Analyze];
+    let aspect = request.aspect.unwrap_or_default();
+    if !aspect.is_original() {
+        actions.push(ActionSpec::Reframe { ratio: aspect.ratio, frame: aspect.frame });
+    }
+    actions.push(ActionSpec::ConvertImage { format: request.format });
     if plan.steps.len() > 1 {
         actions.push(ActionSpec::CompressImage { level: compression });
-        stages.push(if plan.lossless { "Optimizing…".into() } else { "Compressing…".into() });
     }
+    let mut stages: Vec<String> = vec!["Reading image…".into()];
+    stages.extend(plan.labels.iter().cloned());
     stages.push("Finalizing…".into());
 
     *slot = Some(Reporter {

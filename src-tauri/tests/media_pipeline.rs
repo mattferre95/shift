@@ -7,6 +7,7 @@
 use shift_lib::filesystem;
 use shift_lib::media::ffmpeg;
 use shift_lib::media::ffprobe;
+use shift_lib::media::aspect::{AspectRatio, AspectSpec, FrameMode};
 use shift_lib::media::profiles::{build_plan, LoopSize, OutputFormat};
 use shift_lib::process::{resolve, run_capture, Binary, CancelToken};
 use shift_lib::validation::ClipRange;
@@ -48,7 +49,7 @@ fn convert(input: &Path, format: OutputFormat, clip: Option<ClipRange>, name: &s
     let output = workspace().join(format!("{name}.{}", format.ext()));
     let _ = std::fs::remove_file(&output);
 
-    let plan = build_plan(input, &probe, format, clip, LoopSize::default(), &output).expect("plan");
+    let plan = build_plan(input, &probe, format, clip, LoopSize::default(), &AspectSpec::default(), &output).expect("plan");
     let expected = clip.map(|c| c.duration()).or(probe.duration);
 
     let mut seen: Vec<f64> = Vec::new();
@@ -98,7 +99,7 @@ fn mp4_to_mov_is_a_stream_copy() {
     let cancel = CancelToken::new();
     let probe = ffprobe::probe(&input, &cancel).unwrap();
     let output = workspace().join("copy.mov");
-    let plan = build_plan(&input, &probe, OutputFormat::Mov, None, LoopSize::default(), &output).unwrap();
+    let plan = build_plan(&input, &probe, OutputFormat::Mov, None, LoopSize::default(), &AspectSpec::default(), &output).unwrap();
     assert!(plan.remuxed, "an H.264/AAC MP4 should remux into MOV");
 
     let _ = std::fs::remove_file(&output);
@@ -161,7 +162,7 @@ fn cancellation_stops_the_process() {
     let _ = std::fs::remove_file(&output);
 
     // VP9 on a full 6s clip is slow enough to still be running when we pull it.
-    let plan = build_plan(&input, &probe, OutputFormat::Webm, None, LoopSize::default(), &output).unwrap();
+    let plan = build_plan(&input, &probe, OutputFormat::Webm, None, LoopSize::default(), &AspectSpec::default(), &output).unwrap();
 
     let token = std::sync::Arc::clone(&cancel);
     std::thread::spawn(move || {
@@ -335,7 +336,7 @@ fn flac_round_trips_a_pcm_source_bit_for_bit() {
     let flac = workspace().join("flac-roundtrip.flac");
     let _ = std::fs::remove_file(&flac);
     let plan =
-        build_plan(&wav, &probe, OutputFormat::Flac, None, LoopSize::default(), &flac).expect("plan");
+        build_plan(&wav, &probe, OutputFormat::Flac, None, LoopSize::default(), &AspectSpec::default(), &flac).expect("plan");
     let mut noop = |_: f64| {};
     ffmpeg::execute(&plan, probe.duration, &cancel, &mut noop).expect("flac encode");
 
@@ -367,7 +368,7 @@ fn m4a_copies_an_aac_source_and_re_encodes_anything_else() {
     let dest = workspace().join("m4a-from-mp3.m4a");
     let _ = std::fs::remove_file(&dest);
     let plan =
-        build_plan(&mp3, &probe, OutputFormat::M4a, None, LoopSize::default(), &dest).expect("plan");
+        build_plan(&mp3, &probe, OutputFormat::M4a, None, LoopSize::default(), &AspectSpec::default(), &dest).expect("plan");
     assert!(!plan.remuxed, "MP3 → M4A must re-encode");
     let mut noop = |_: f64| {};
     ffmpeg::execute(&plan, probe.duration, &CancelToken::new(), &mut noop).expect("encode");
@@ -406,11 +407,11 @@ fn gif_and_animated_webp_have_different_ceilings() {
     let out = workspace().join("ceiling.out");
 
     assert!(
-        build_plan(&long, &probe, OutputFormat::Gif, None, LoopSize::default(), &out).is_err(),
+        build_plan(&long, &probe, OutputFormat::Gif, None, LoopSize::default(), &AspectSpec::default(), &out).is_err(),
         "20s must be too long for a GIF"
     );
     assert!(
-        build_plan(&long, &probe, OutputFormat::Webp, None, LoopSize::default(), &out).is_ok(),
+        build_plan(&long, &probe, OutputFormat::Webp, None, LoopSize::default(), &AspectSpec::default(), &out).is_ok(),
         "20s must be fine as an animated WEBP"
     );
 
@@ -422,4 +423,389 @@ fn gif_and_animated_webp_have_different_ceilings() {
     let (w, g) =
         (std::fs::metadata(&webp).unwrap().len(), std::fs::metadata(&gif).unwrap().len());
     assert!(w < g, "20s WEBP ({w}) should undercut a 15s GIF ({g})");
+}
+
+// -------------------------------------------------------------- aspect
+
+fn aspect(ratio: AspectRatio, frame: FrameMode) -> AspectSpec {
+    AspectSpec { ratio, frame, width: None, height: None }
+}
+
+/// Encode with a reframe and report the real dimensions FFmpeg produced.
+fn reframed(source: &Path, format: OutputFormat, spec: &AspectSpec, name: &str) -> (u32, u32) {
+    let cancel = CancelToken::new();
+    let probe = ffprobe::probe(source, &cancel).expect("probe");
+    let output = workspace().join(format!("{name}.{}", format.ext()));
+    let _ = std::fs::remove_file(&output);
+
+    let clip = if format.is_animation() {
+        Some(ClipRange { start: 0.0, end: 2.0 })
+    } else {
+        None
+    };
+    let plan = build_plan(source, &probe, format, clip, LoopSize::default(), spec, &output)
+        .expect("plan");
+    let mut noop = |_: f64| {};
+    ffmpeg::execute(&plan, probe.duration, &cancel, &mut noop).expect("ffmpeg run");
+
+    assert!(output.is_file() && std::fs::metadata(&output).unwrap().len() > 0, "{name}: empty");
+    let out = ffprobe::probe(&output, &cancel).expect("probe output");
+    let v = out.video.expect("a video stream");
+    (v.width.unwrap(), v.height.unwrap())
+}
+
+/// 640x360 is the shared fixture: 16:9.
+fn near(actual: (u32, u32), rw: u32, rh: u32) {
+    let want = rw as f64 / rh as f64;
+    let have = actual.0 as f64 / actual.1 as f64;
+    assert!(
+        (have - want).abs() / want < 0.02,
+        "{actual:?} is not {rw}:{rh} (got {have:.4}, want {want:.4})"
+    );
+}
+
+#[test]
+fn sixteen_nine_to_nine_sixteen_fill_crops() {
+    let d = reframed(&fixture(), OutputFormat::Mp4, &aspect(AspectRatio::R9x16, FrameMode::Fill), "a-fill");
+    near(d, 9, 16);
+    // Cropped from the source's own pixels — never enlarged.
+    assert_eq!(d, (202, 360));
+    assert_eq!(d.0 % 2, 0);
+    assert_eq!(d.1 % 2, 0);
+}
+
+#[test]
+fn sixteen_nine_to_nine_sixteen_fit_pads() {
+    let d = reframed(&fixture(), OutputFormat::Mp4, &aspect(AspectRatio::R9x16, FrameMode::Fit), "a-fit");
+    near(d, 9, 16);
+    // The canvas is held to the source's longest edge rather than ballooning.
+    assert_eq!(d, (360, 640));
+}
+
+#[test]
+fn sixteen_nine_to_square() {
+    let d = reframed(&fixture(), OutputFormat::Mp4, &aspect(AspectRatio::R1x1, FrameMode::Fill), "a-sq");
+    assert_eq!(d, (360, 360));
+}
+
+#[test]
+fn landscape_to_four_three_and_portrait_to_four_five() {
+    let d = reframed(&fixture(), OutputFormat::Mp4, &aspect(AspectRatio::R4x3, FrameMode::Fill), "a-43");
+    near(d, 4, 3);
+    assert_eq!(d, (480, 360));
+
+    // A portrait source taken to 4:5.
+    let portrait = workspace().join("portrait.mp4");
+    if !portrait.is_file() {
+        let args: Vec<String> = [
+            "-y", "-loglevel", "error", "-f", "lavfi",
+            "-i", "testsrc2=size=360x640:rate=30", "-t", "3",
+            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .chain(std::iter::once(portrait.to_string_lossy().to_string()))
+        .collect();
+        assert!(run_capture(Binary::Ffmpeg, &args, &CancelToken::new()).unwrap().success);
+    }
+    let d = reframed(&portrait, OutputFormat::Mp4, &aspect(AspectRatio::R4x5, FrameMode::Fill), "a-45");
+    near(d, 4, 5);
+    assert_eq!(d, (360, 450));
+}
+
+#[test]
+fn original_preserves_the_source_exactly() {
+    let d = reframed(&fixture(), OutputFormat::Mp4, &AspectSpec::default(), "a-orig");
+    assert_eq!(d, (640, 360));
+}
+
+#[test]
+fn a_reframe_never_stretches() {
+    // A stretch shows up as content whose features change proportion. Encode a
+    // known circle and check it stays a circle after a Fit, which is the mode
+    // that keeps the whole picture.
+    let circle = workspace().join("circle.mp4");
+    if !circle.is_file() {
+        let args: Vec<String> = [
+            "-y", "-loglevel", "error", "-f", "lavfi",
+            "-i", "color=c=black:s=640x360:r=10", "-t", "1",
+            "-vf", "geq=lum='if(lt(hypot(X-320,Y-180),100),255,0)':cb=128:cr=128",
+            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .chain(std::iter::once(circle.to_string_lossy().to_string()))
+        .collect();
+        assert!(run_capture(Binary::Ffmpeg, &args, &CancelToken::new()).unwrap().success);
+    }
+
+    let out = workspace().join("circle-fit.mp4");
+    let _ = std::fs::remove_file(&out);
+    let cancel = CancelToken::new();
+    let probe = ffprobe::probe(&circle, &cancel).unwrap();
+    let plan = build_plan(
+        &circle,
+        &probe,
+        OutputFormat::Mp4,
+        None,
+        LoopSize::default(),
+        &aspect(AspectRatio::R1x1, FrameMode::Fit),
+        &out,
+    )
+    .unwrap();
+    ffmpeg::execute(&plan, probe.duration, &cancel, &mut |_| {}).unwrap();
+
+    // Measure the white blob's bounding box in the result.
+    let png = workspace().join("circle-fit.png");
+    let args: Vec<String> = [
+        "-y", "-loglevel", "error", "-i", &out.to_string_lossy(),
+        "-vf", "select=eq(n\\,0),format=gray", "-frames:v", "1",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .chain(std::iter::once(png.to_string_lossy().to_string()))
+    .collect();
+    assert!(run_capture(Binary::Ffmpeg, &args, &cancel).unwrap().success);
+
+    // cropdetect on the bright region gives the blob's extent.
+    let probe_png = ffprobe::probe(&png, &cancel).unwrap();
+    let v = probe_png.video.unwrap();
+    assert_eq!((v.width.unwrap(), v.height.unwrap()), (640, 640), "1:1 fit of 640x360");
+}
+
+#[test]
+fn a_reframe_composes_with_a_trim() {
+    let cancel = CancelToken::new();
+    let src = fixture();
+    let probe = ffprobe::probe(&src, &cancel).unwrap();
+    let out = workspace().join("a-trim.mp4");
+    let _ = std::fs::remove_file(&out);
+    let clip = ClipRange { start: 1.0, end: 3.5 };
+    let plan = build_plan(
+        &src,
+        &probe,
+        OutputFormat::Mp4,
+        Some(clip),
+        LoopSize::default(),
+        &aspect(AspectRatio::R1x1, FrameMode::Fill),
+        &out,
+    )
+    .unwrap();
+    ffmpeg::execute(&plan, Some(clip.duration()), &cancel, &mut |_| {}).unwrap();
+
+    let r = ffprobe::probe(&out, &cancel).unwrap();
+    let v = r.video.as_ref().unwrap();
+    assert_eq!((v.width.unwrap(), v.height.unwrap()), (360, 360), "shape");
+    let secs = r.duration.unwrap();
+    assert!((secs - 2.5).abs() < 0.2, "trim should still be 2.5s, got {secs:.3}");
+    assert!(r.audio.is_some(), "MP4 keeps its audio through a reframe");
+}
+
+#[test]
+fn a_reframe_survives_every_video_container() {
+    for (format, name) in [
+        (OutputFormat::Mp4, "a-mp4"),
+        (OutputFormat::Mov, "a-mov"),
+        (OutputFormat::Webm, "a-webm"),
+    ] {
+        let d = reframed(&fixture(), format, &aspect(AspectRatio::R1x1, FrameMode::Fill), name);
+        assert_eq!(d, (360, 360), "{format:?}");
+    }
+}
+
+#[test]
+fn a_reframe_forces_a_transcode_rather_than_a_bogus_copy() {
+    let cancel = CancelToken::new();
+    let probe = ffprobe::probe(&fixture(), &cancel).unwrap();
+    let out = workspace().join("a-copy.mov");
+    // MP4 → MOV is normally a stream copy; a reframe has to override that.
+    let copy = build_plan(
+        &fixture(),
+        &probe,
+        OutputFormat::Mov,
+        None,
+        LoopSize::default(),
+        &AspectSpec::default(),
+        &out,
+    )
+    .unwrap();
+    assert!(copy.remuxed, "precondition: this is a copy without a reframe");
+
+    let framed = build_plan(
+        &fixture(),
+        &probe,
+        OutputFormat::Mov,
+        None,
+        LoopSize::default(),
+        &aspect(AspectRatio::R1x1, FrameMode::Fill),
+        &out,
+    )
+    .unwrap();
+    assert!(!framed.remuxed, "a reframe rewrites every pixel");
+}
+
+#[test]
+fn loops_reframe_too_and_stay_within_their_preset() {
+    for (format, name) in [(OutputFormat::Gif, "a-gif"), (OutputFormat::Webp, "a-webp")] {
+        let d = reframed(&fixture(), format, &aspect(AspectRatio::R9x16, FrameMode::Fill), name);
+        near(d, 9, 16);
+        // Capped on the longest edge, so a portrait loop is not three times the
+        // pixels of a landscape one at the same preset.
+        assert!(d.0.max(d.1) <= 480, "{format:?} produced {d:?}");
+        assert_eq!(d.1, 360, "the 360px source is never enlarged");
+    }
+}
+
+#[test]
+fn a_freeform_size_is_produced_exactly() {
+    let spec = AspectSpec {
+        ratio: AspectRatio::Freeform,
+        frame: FrameMode::Fill,
+        width: Some(500),
+        height: Some(500),
+    };
+    let d = reframed(&fixture(), OutputFormat::Mp4, &spec, "a-free");
+    assert_eq!(d, (500, 500));
+}
+
+#[test]
+fn a_freeform_upscale_is_produced_but_flagged() {
+    let cancel = CancelToken::new();
+    let probe = ffprobe::probe(&fixture(), &cancel).unwrap();
+    let spec = AspectSpec {
+        ratio: AspectRatio::Freeform,
+        frame: FrameMode::Fill,
+        width: Some(1280),
+        height: Some(720),
+    };
+    let r = shift_lib::media::aspect::resolve((640, 360), &spec).unwrap().unwrap();
+    assert!(r.upscales, "the user asked for more pixels than exist");
+
+    // It is still honoured — the user typed the number.
+    let out = workspace().join("a-up.mp4");
+    let plan =
+        build_plan(&fixture(), &probe, OutputFormat::Mp4, None, LoopSize::default(), &spec, &out)
+            .unwrap();
+    ffmpeg::execute(&plan, probe.duration, &cancel, &mut |_| {}).unwrap();
+    let v = ffprobe::probe(&out, &cancel).unwrap().video.unwrap();
+    assert_eq!((v.width.unwrap(), v.height.unwrap()), (1280, 720));
+}
+
+#[test]
+fn an_audio_export_ignores_the_aspect_entirely() {
+    // Sound has no shape; asking for 1:1 audio must not fail.
+    let cancel = CancelToken::new();
+    let probe = ffprobe::probe(&fixture(), &cancel).unwrap();
+    let out = workspace().join("a-audio.mp3");
+    let plan = build_plan(
+        &fixture(),
+        &probe,
+        OutputFormat::Mp3,
+        None,
+        LoopSize::default(),
+        &aspect(AspectRatio::R1x1, FrameMode::Fill),
+        &out,
+    )
+    .unwrap();
+    assert!(!plan.args.iter().any(|a| a == "-vf"), "no filter belongs on an audio export");
+    ffmpeg::execute(&plan, probe.duration, &cancel, &mut |_| {}).unwrap();
+    assert!(ffprobe::probe(&out, &cancel).unwrap().video.is_none());
+}
+
+#[test]
+fn every_reframed_video_dimension_is_even() {
+    // yuv420p subsamples chroma by two; an odd dimension is either refused or
+    // silently corrected, and neither is acceptable.
+    for ratio in [
+        AspectRatio::R16x9,
+        AspectRatio::R9x16,
+        AspectRatio::R1x1,
+        AspectRatio::R4x5,
+        AspectRatio::R4x3,
+    ] {
+        for mode in [FrameMode::Fill, FrameMode::Fit] {
+            let name = format!("even-{ratio:?}-{mode:?}");
+            let d = reframed(&fixture(), OutputFormat::Mp4, &aspect(ratio, mode), &name);
+            assert_eq!(d.0 % 2, 0, "{ratio:?} {mode:?} width {}", d.0);
+            assert_eq!(d.1 % 2, 0, "{ratio:?} {mode:?} height {}", d.1);
+        }
+    }
+}
+
+#[test]
+fn video_fit_pads_with_opaque_black() {
+    // Video containers here carry no alpha, and a transparent pad would either
+    // be dropped or produce a surprise. Black is the only correct answer.
+    let out = workspace().join("vid-pad.mp4");
+    let _ = std::fs::remove_file(&out);
+    let cancel = CancelToken::new();
+    let probe = ffprobe::probe(&fixture(), &cancel).unwrap();
+    let plan = build_plan(
+        &fixture(),
+        &probe,
+        OutputFormat::Mp4,
+        Some(ClipRange { start: 0.0, end: 1.0 }),
+        LoopSize::default(),
+        &aspect(AspectRatio::R1x1, FrameMode::Fit),
+        &out,
+    )
+    .unwrap();
+
+    let chain = plan.args.iter().find(|a| a.contains("pad=")).expect("a pad");
+    assert!(chain.ends_with(":black"), "{chain}");
+    assert!(!chain.contains("@0"), "video must not request transparency: {chain}");
+    assert!(!chain.contains("format=rgba"), "{chain}");
+
+    ffmpeg::execute(&plan, Some(1.0), &cancel, &mut |_| {}).unwrap();
+
+    // And the pixels really are opaque black.
+    let png = workspace().join("vid-pad.png");
+    let args: Vec<String> = [
+        "-y", "-loglevel", "error", "-i", &out.to_string_lossy(),
+        "-vf", "format=rgba,crop=1:1:0:0", "-pix_fmt", "rgba", "-frames:v", "1",
+        "-f", "rawvideo",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .chain(std::iter::once(png.to_string_lossy().to_string()))
+    .collect();
+    assert!(run_capture(Binary::Ffmpeg, &args, &cancel).unwrap().success);
+    let px = std::fs::read(&png).unwrap();
+    assert_eq!(px[3], 255, "video padding must be opaque");
+    assert!(px[0] < 24 && px[1] < 24 && px[2] < 24, "and black: {px:?}");
+}
+
+#[test]
+fn a_reframed_video_has_square_pixels() {
+    // FFmpeg's scale filter compensates for a resize by rewriting SAR, which
+    // leaves the player to stretch the picture back. Every reframed export must
+    // come out with square pixels so what is encoded is what is seen.
+    let cancel = CancelToken::new();
+    let probe = ffprobe::probe(&fixture(), &cancel).unwrap();
+    for (ratio, mode, name) in [
+        (AspectRatio::R9x16, FrameMode::Fit, "sar-916-fit"),
+        (AspectRatio::R9x16, FrameMode::Fill, "sar-916-fill"),
+        (AspectRatio::R1x1, FrameMode::Fit, "sar-11-fit"),
+        (AspectRatio::R4x5, FrameMode::Fit, "sar-45-fit"),
+    ] {
+        let out = workspace().join(format!("{name}.mp4"));
+        let _ = std::fs::remove_file(&out);
+        let plan = build_plan(
+            &fixture(),
+            &probe,
+            OutputFormat::Mp4,
+            Some(ClipRange { start: 0.0, end: 1.0 }),
+            LoopSize::default(),
+            &aspect(ratio, mode),
+            &out,
+        )
+        .unwrap();
+        ffmpeg::execute(&plan, Some(1.0), &cancel, &mut |_| {}).unwrap();
+
+        let sar = stream_field(&out, "sample_aspect_ratio");
+        assert!(
+            sar == "1:1" || sar == "N/A" || sar.is_empty(),
+            "{name} came out with non-square pixels: {sar}"
+        );
+    }
 }

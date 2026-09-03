@@ -4,6 +4,7 @@
 //! by macOS itself — so no personal photos are needed or committed.
 
 use shift_lib::media::image::{self, Compression, ImageStep};
+use shift_lib::media::aspect::{AspectRatio, AspectSpec, FrameMode};
 use shift_lib::media::profiles::OutputFormat;
 use shift_lib::process::{run_capture, Binary, CancelToken};
 use std::path::{Path, PathBuf};
@@ -67,7 +68,7 @@ fn convert(input: &Path, format: OutputFormat, compression: Compression, name: &
     let output = work.join(format!("out.{}", format.ext()));
 
     let plan =
-        image::build_plan(input, &probe.format, format, compression, probe.has_alpha, &work, &output).expect("plan");
+        image::build_plan(input, &probe.format, format, compression, probe.has_alpha, (probe.width, probe.height), &AspectSpec::default(), &work, &output).expect("plan");
     for step in &plan.steps {
         let (bin, args) = match step {
             ImageStep::Sips(a) => (Binary::Sips, a),
@@ -281,6 +282,8 @@ fn a_transparent_source_keeps_its_alpha_or_is_refused() {
         OutputFormat::Avif,
         Compression::Balanced,
         probe.has_alpha,
+        (probe.width, probe.height),
+        &AspectSpec::default(),
         &work,
         &work.join("o.avif"),
     )
@@ -299,4 +302,365 @@ fn a_transparent_source_keeps_its_alpha_or_is_refused() {
     )
     .unwrap();
     assert!(out.stdout.trim().contains("yuva"), "WEBP dropped alpha: {}", out.stdout.trim());
+}
+
+// --------------------------------------------------------------- aspect
+
+fn framed(
+    input: &Path,
+    format: OutputFormat,
+    spec: &AspectSpec,
+    name: &str,
+) -> (u32, u32, bool) {
+    let cancel = CancelToken::new();
+    let probe = image::probe(input, &cancel).expect("probe");
+    let work = workspace().join(format!("work-{name}"));
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(&work).unwrap();
+    let output = work.join(format!("out.{}", format.ext()));
+
+    let plan = image::build_plan(
+        input,
+        &probe.format,
+        format,
+        Compression::Balanced,
+        probe.has_alpha,
+        (probe.width, probe.height),
+        spec,
+        &work,
+        &output,
+    )
+    .expect("plan");
+    assert_eq!(plan.steps.len(), plan.labels.len(), "every step needs a label");
+
+    for step in &plan.steps {
+        let (bin, args) = match step {
+            ImageStep::Sips(a) => (Binary::Sips, a),
+            ImageStep::Ffmpeg(a) => (Binary::Ffmpeg, a),
+        };
+        let out = run_capture(bin, args, &cancel).unwrap();
+        assert!(out.success, "{name}: step failed: {}", out.log());
+    }
+    assert!(output.is_file() && std::fs::metadata(&output).unwrap().len() > 0, "{name}: empty");
+
+    let result = image::probe(&output, &cancel).expect("probe output");
+    (result.width, result.height, result.has_alpha)
+}
+
+fn spec(ratio: AspectRatio, frame: FrameMode) -> AspectSpec {
+    AspectSpec { ratio, frame, width: None, height: None }
+}
+
+#[test]
+fn images_reframe_to_every_ratio() {
+    // The shared fixture is 1200x800 — 3:2.
+    let (_, jpg, _) = fixtures();
+    let cases = [
+        (AspectRatio::R1x1, FrameMode::Fill, (800, 800)),
+        (AspectRatio::R9x16, FrameMode::Fill, (450, 800)),
+        (AspectRatio::R16x9, FrameMode::Fill, (1200, 674)),
+        (AspectRatio::R4x5, FrameMode::Fill, (640, 800)),
+        (AspectRatio::R4x3, FrameMode::Fill, (1066, 800)),
+    ];
+    for (ratio, mode, want) in cases {
+        let name = format!("img-{ratio:?}");
+        let (w, h, _) = framed(&jpg, OutputFormat::Jpg, &spec(ratio, mode), &name);
+        assert_eq!((w, h), want, "{ratio:?} {mode:?}");
+    }
+}
+
+#[test]
+fn image_fit_pads_instead_of_cropping() {
+    let (_, jpg, _) = fixtures();
+    let (w, h, _) = framed(&jpg, OutputFormat::Jpg, &spec(AspectRatio::R1x1, FrameMode::Fit), "img-fit");
+    // A 1:1 fit of 1200x800 is a 1200x1200 canvas with the picture untouched.
+    assert_eq!((w, h), (1200, 1200));
+}
+
+#[test]
+fn image_original_is_untouched() {
+    let (_, jpg, _) = fixtures();
+    let (w, h, _) = framed(&jpg, OutputFormat::Jpg, &AspectSpec::default(), "img-orig");
+    assert_eq!((w, h), (1200, 800));
+}
+
+#[test]
+fn a_reframe_works_from_heic_through_the_same_pipeline() {
+    let (heic, _, _) = fixtures();
+    for format in [OutputFormat::Jpg, OutputFormat::Png, OutputFormat::Webp, OutputFormat::Avif] {
+        let name = format!("heic-{}", format.ext());
+        let (w, h, _) = framed(&heic, format, &spec(AspectRatio::R1x1, FrameMode::Fill), &name);
+        assert_eq!((w, h), (800, 800), "{format:?}");
+    }
+}
+
+#[test]
+fn a_reframed_png_keeps_its_transparency() {
+    let src = transparent_png();
+    let cancel = CancelToken::new();
+    assert!(image::probe(&src, &cancel).unwrap().has_alpha, "fixture precondition");
+
+    // Fill crops, so only original pixels survive — alpha included.
+    let (w, h, alpha) =
+        framed(&src, OutputFormat::Png, &spec(AspectRatio::R9x16, FrameMode::Fill), "alpha-fill");
+    assert_eq!((w, h), (224, 400));
+    assert!(alpha, "a reframe must not flatten a PNG's transparency");
+
+    // Fit adds black bars, but the source's own alpha still has to survive.
+    let (_, _, alpha) =
+        framed(&src, OutputFormat::Png, &spec(AspectRatio::R9x16, FrameMode::Fit), "alpha-fit");
+    assert!(alpha, "padding must not flatten the picture's own transparency");
+}
+
+#[test]
+fn a_reframed_webp_keeps_its_transparency() {
+    let (_, _, alpha) = framed(
+        &transparent_png(),
+        OutputFormat::Webp,
+        &spec(AspectRatio::R1x1, FrameMode::Fill),
+        "alpha-webp",
+    );
+    assert!(alpha, "WEBP carries alpha and must keep it through a reframe");
+}
+
+#[test]
+fn reframing_does_not_weaken_the_avif_transparency_safeguard() {
+    // The reframe pass must not become a back door that launders a transparent
+    // source into a format which cannot hold its alpha.
+    let src = transparent_png();
+    let probe = image::probe(&src, &CancelToken::new()).unwrap();
+    let work = workspace().join("work-avif-guard");
+    std::fs::create_dir_all(&work).unwrap();
+    let err = image::build_plan(
+        &src,
+        &probe.format,
+        OutputFormat::Avif,
+        Compression::Balanced,
+        probe.has_alpha,
+        (probe.width, probe.height),
+        &spec(AspectRatio::R1x1, FrameMode::Fill),
+        &work,
+        &work.join("o.avif"),
+    )
+    .unwrap_err();
+    assert_eq!(err.code, "avif_alpha");
+}
+
+#[test]
+fn a_freeform_image_size_is_exact_and_reports_an_upscale() {
+    let (_, jpg, _) = fixtures();
+    let down = AspectSpec {
+        ratio: AspectRatio::Freeform,
+        frame: FrameMode::Fill,
+        width: Some(300),
+        height: Some(300),
+    };
+    let (w, h, _) = framed(&jpg, OutputFormat::Png, &down, "img-free");
+    assert_eq!((w, h), (300, 300));
+
+    let up = AspectSpec { width: Some(2400), height: Some(1600), ..down };
+    let r = shift_lib::media::aspect::resolve((1200, 800), &up).unwrap().unwrap();
+    assert!(r.upscales, "asking for twice the pixels must be reported");
+    let (w, h, _) = framed(&jpg, OutputFormat::Png, &up, "img-up");
+    assert_eq!((w, h), (2400, 1600), "and still honoured, because it was typed");
+}
+
+#[test]
+fn a_tiny_image_still_reframes_cleanly() {
+    let tiny = workspace().join("tiny.png");
+    if !tiny.is_file() {
+        let args: Vec<String> = [
+            "-y", "-loglevel", "error", "-f", "lavfi",
+            "-i", "testsrc2=size=20x12", "-frames:v", "1",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .chain(std::iter::once(tiny.to_string_lossy().to_string()))
+        .collect();
+        assert!(run_capture(Binary::Ffmpeg, &args, &CancelToken::new()).unwrap().success);
+    }
+    for mode in [FrameMode::Fill, FrameMode::Fit] {
+        let name = format!("tiny-{mode:?}");
+        let (w, h, _) = framed(&tiny, OutputFormat::Png, &spec(AspectRatio::R1x1, mode), &name);
+        assert!(w >= 2 && h >= 2, "collapsed to {w}x{h}");
+        assert_eq!(w, h, "1:1 should be square");
+    }
+}
+
+#[test]
+fn an_image_reframe_reuses_the_existing_conversion_rather_than_a_second_path() {
+    // The reframe is a lossless pre-pass; the format's own encoder still does
+    // the encoding, with the quality ladder it already had.
+    let (_, jpg, _) = fixtures();
+    let probe = image::probe(&jpg, &CancelToken::new()).unwrap();
+    let work = workspace().join("work-compose");
+    std::fs::create_dir_all(&work).unwrap();
+    let plan = image::build_plan(
+        &jpg,
+        &probe.format,
+        OutputFormat::Jpg,
+        Compression::Strong,
+        false,
+        (probe.width, probe.height),
+        &spec(AspectRatio::R1x1, FrameMode::Fill),
+        &work,
+        &work.join("o.jpg"),
+    )
+    .unwrap();
+
+    // Reframe first, then the ordinary sips conversion carrying the quality.
+    assert_eq!(plan.steps.len(), 2, "{:?}", plan.labels);
+    assert!(matches!(plan.steps[0], ImageStep::Ffmpeg(_)), "the reframe pass");
+    let ImageStep::Sips(args) = &plan.steps[1] else { panic!("expected the usual sips convert") };
+    assert!(args.iter().any(|a| a == "65"), "Strong's quality must still be applied");
+}
+
+// -------------------------------------------------- fit padding colour
+
+/// The RGBA of a corner pixel — the padded region for any Fit that pads.
+fn corner_rgba(path: &Path) -> [u8; 4] {
+    let raw = workspace().join(format!(
+        "corner-{}.raw",
+        path.file_name().unwrap().to_string_lossy().replace('.', "-")
+    ));
+    let args: Vec<String> = [
+        "-y", "-loglevel", "error", "-i", &path.to_string_lossy(),
+        "-vf", "format=rgba,crop=1:1:0:0", "-pix_fmt", "rgba", "-f", "rawvideo",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .chain(std::iter::once(raw.to_string_lossy().to_string()))
+    .collect();
+    let out = run_capture(Binary::Ffmpeg, &args, &CancelToken::new()).unwrap();
+    assert!(out.success, "could not read corner: {}", out.log());
+    let bytes = std::fs::read(&raw).unwrap();
+    [bytes[0], bytes[1], bytes[2], bytes[3]]
+}
+
+/// Run a plan and hand back the finished file, rather than only its size.
+fn produce(input: &Path, format: OutputFormat, spec: &AspectSpec, name: &str) -> PathBuf {
+    let cancel = CancelToken::new();
+    let probe = image::probe(input, &cancel).expect("probe");
+    let work = workspace().join(format!("work-{name}"));
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(&work).unwrap();
+    let output = work.join(format!("out.{}", format.ext()));
+
+    let plan = image::build_plan(
+        input,
+        &probe.format,
+        format,
+        Compression::None,
+        probe.has_alpha,
+        (probe.width, probe.height),
+        spec,
+        &work,
+        &output,
+    )
+    .expect("plan");
+    for step in &plan.steps {
+        let (bin, args) = match step {
+            ImageStep::Sips(a) => (Binary::Sips, a),
+            ImageStep::Ffmpeg(a) => (Binary::Ffmpeg, a),
+        };
+        let out = run_capture(bin, args, &cancel).unwrap();
+        assert!(out.success, "{name}: {}", out.log());
+    }
+    output
+}
+
+/// An opaque source, so any transparency in the result can only be padding.
+fn opaque_wide() -> PathBuf {
+    static P: OnceLock<PathBuf> = OnceLock::new();
+    P.get_or_init(|| {
+        let path = workspace().join("opaque.png");
+        if !path.is_file() {
+            let args: Vec<String> = [
+                "-y", "-loglevel", "error", "-f", "lavfi",
+                "-i", "color=c=red:s=400x200", "-frames:v", "1",
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .chain(std::iter::once(path.to_string_lossy().to_string()))
+            .collect();
+            assert!(run_capture(Binary::Ffmpeg, &args, &CancelToken::new()).unwrap().success);
+        }
+        path
+    })
+    .clone()
+}
+
+#[test]
+fn fit_pads_a_png_transparently() {
+    let out = produce(&opaque_wide(), OutputFormat::Png, &spec(AspectRatio::R1x1, FrameMode::Fit), "pad-png");
+    let c = corner_rgba(&out);
+    assert_eq!(c[3], 0, "PNG padding should be transparent, got {c:?}");
+    assert!(image::probe(&out, &CancelToken::new()).unwrap().has_alpha);
+}
+
+#[test]
+fn fit_pads_a_webp_transparently() {
+    let out = produce(&opaque_wide(), OutputFormat::Webp, &spec(AspectRatio::R1x1, FrameMode::Fit), "pad-webp");
+    let c = corner_rgba(&out);
+    assert_eq!(c[3], 0, "WEBP padding should be transparent, got {c:?}");
+}
+
+#[test]
+fn fit_pads_a_jpg_with_opaque_black() {
+    // JPEG has no alpha channel, so the only honest padding is a colour.
+    let out = produce(&opaque_wide(), OutputFormat::Jpg, &spec(AspectRatio::R1x1, FrameMode::Fit), "pad-jpg");
+    let c = corner_rgba(&out);
+    assert_eq!(c[3], 255, "JPEG cannot be transparent");
+    assert!(c[0] < 24 && c[1] < 24 && c[2] < 24, "padding should be black, got {c:?}");
+}
+
+#[test]
+fn fit_pads_an_avif_opaquely() {
+    // AVIF's canvas is opaque here for the same reason a transparent source is
+    // refused: the bundled libaom-av1 has no alpha pixel format.
+    let out = produce(&opaque_wide(), OutputFormat::Avif, &spec(AspectRatio::R1x1, FrameMode::Fit), "pad-avif");
+    let c = corner_rgba(&out);
+    assert_eq!(c[3], 255, "AVIF padding must be opaque");
+    assert!(c[0] < 24 && c[1] < 24 && c[2] < 24, "padding should be black, got {c:?}");
+}
+
+#[test]
+fn a_transparent_source_keeps_its_own_alpha_through_a_padded_fit() {
+    // The picture's transparency and the padding are separate things: padding a
+    // transparent PNG must not flatten the parts that were already see-through.
+    let src = transparent_png();
+    let out = produce(&src, OutputFormat::Png, &spec(AspectRatio::R9x16, FrameMode::Fit), "pad-alpha");
+    assert!(image::probe(&out, &CancelToken::new()).unwrap().has_alpha);
+    assert_eq!(corner_rgba(&out)[3], 0);
+}
+
+#[test]
+fn the_avif_alpha_safeguard_still_refuses_a_transparent_source_when_padding() {
+    let src = transparent_png();
+    let probe = image::probe(&src, &CancelToken::new()).unwrap();
+    let work = workspace().join("work-avif-pad-guard");
+    std::fs::create_dir_all(&work).unwrap();
+    for mode in [FrameMode::Fill, FrameMode::Fit] {
+        let err = image::build_plan(
+            &src,
+            &probe.format,
+            OutputFormat::Avif,
+            Compression::Balanced,
+            probe.has_alpha,
+            (probe.width, probe.height),
+            &spec(AspectRatio::R1x1, mode),
+            &work,
+            &work.join("o.avif"),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "avif_alpha", "{mode:?}");
+    }
+}
+
+#[test]
+fn only_the_formats_that_can_hold_alpha_are_padded_transparently() {
+    assert!(image::keeps_alpha(OutputFormat::Png));
+    assert!(image::keeps_alpha(OutputFormat::Webp));
+    assert!(!image::keeps_alpha(OutputFormat::Jpg));
+    assert!(!image::keeps_alpha(OutputFormat::Avif));
 }

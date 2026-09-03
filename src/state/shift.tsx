@@ -20,10 +20,18 @@ import * as ipc from "@/lib/ipc";
 import { formatTimestamp } from "@/lib/format";
 import {
   compressionOptions,
+  ASPECT_DEFAULT,
   isAnimationFormat,
   isAudioFormat,
+  keepsAlpha,
   loopLimit,
+  MAX_DIMENSION,
+  MIN_DIMENSION,
+  type AspectPreview,
+  type AspectRatio,
+  type AspectSpec,
   type Compression,
+  type FrameMode,
   type LoopSize,
   type ExportRequest,
   type Health,
@@ -73,6 +81,8 @@ interface ShiftState {
   clipSeconds: number | null;
   compression: Compression;
   loopSize: LoopSize;
+  aspect: AspectSpec;
+  aspectPreview: AspectPreview | null;
   job: Job | null;
   output: JobOutput | null;
   error: ShiftError | null;
@@ -100,6 +110,19 @@ interface ShiftApi extends ShiftState {
   loopTooLong: boolean;
   /** The cap that applies to the format currently chosen. */
   loopMaxSeconds: number;
+  /** The output has a shape, so ASPECT is meaningful. Audio never is. */
+  showAspect: boolean;
+  /** The dimensions this aspect choice produces, or null when unknowable. */
+  aspectPreview: AspectPreview | null;
+  /** Fit will pad with transparency rather than black. */
+  padsTransparent: boolean;
+  /** The custom size entered would enlarge the source. */
+  aspectUpscales: boolean;
+  setAspectRatio: (r: AspectRatio) => void;
+  setFrameMode: (m: FrameMode) => void;
+  setAspectSize: (side: "width" | "height", value: number | null) => void;
+  aspectLocked: boolean;
+  toggleAspectLock: () => void;
   compressionChoices: { id: Compression; label: string }[];
   setCompression: (c: Compression) => void;
   setLoopSize: (l: LoopSize) => void;
@@ -135,6 +158,8 @@ const initial: ShiftState = {
   clipSeconds: null,
   compression: "none",
   loopSize: "standard",
+  aspect: ASPECT_DEFAULT,
+  aspectPreview: null,
   job: null,
   output: null,
   error: null,
@@ -149,6 +174,9 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
   const [s, set] = useState<ShiftState>(initial);
   // True while the Save panel is open, so the action cannot be fired twice.
   const [saving, setSaving] = useState(false);
+  // A UI preference rather than part of the request: the backend is told a
+  // width and a height, never how the user arrived at them.
+  const [aspectLocked, setAspectLocked] = useState(true);
   const patch = useCallback((p: Partial<ShiftState>) => set((prev) => ({ ...prev, ...p })), []);
 
   // The last thing the user handed us, so Try again can repeat it.
@@ -236,6 +264,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
             clipError: null,
             clipLabel: null,
             clipSeconds: null,
+            aspect: ASPECT_DEFAULT,
             output: null,
             error: null,
           }));
@@ -268,6 +297,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
             clipError: null,
             clipLabel: null,
             clipSeconds: null,
+            aspect: ASPECT_DEFAULT,
             output: null,
             error: null,
           }));
@@ -327,6 +357,25 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
   // has to answer this, never the format alone.
   const sourceMoves = s.urlMedia?.hasVideo ?? s.localMedia?.hasVideo ?? false;
   const isLoop = isAnimationFormat(s.format) && sourceMoves && !isImage;
+  // Sound has no shape. ASPECT appears only when the thing being produced is
+  // something you can look at.
+  const showAspect = (sourceMoves || isImage) && !isAudioFormat(s.format);
+  // Reported by the native layer alongside the dimensions, so the warning and
+  // the numbers can never disagree.
+  const aspectUpscales = s.aspectPreview?.upscales ?? false;
+  // A still headed for a format with an alpha channel is padded with nothing
+  // instead of black, so the words describing Fit have to follow the format.
+  const padsTransparent = isImage && keepsAlpha(s.format);
+  // A custom size has to be a real size before Export means anything. The
+  // native layer refuses the same values; this only stops the user reaching the
+  // Save panel first.
+  const aspectInvalid =
+    showAspect &&
+    s.aspect.ratio === "freeform" &&
+    [s.aspect.width, s.aspect.height].some(
+      (v) => v == null || v < MIN_DIMENSION || v > MAX_DIMENSION,
+    );
+
   // GIF and animated WEBP have different limits, so the format decides.
   const limit = loopLimit(s.format);
   const loopMaxSeconds = limit.max;
@@ -336,6 +385,29 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
   // opens, rather than after the user has already named a file.
   const loopSeconds = s.clipEnabled ? s.clipSeconds : duration;
   const loopTooLong = isLoop && (loopSeconds ?? 0) > limit.max + 0.05;
+
+  // ---- aspect preview -----------------------------------------------------
+  // Pure arithmetic in the native layer: no process is spawned, so this is
+  // cheap enough to run on every keystroke and keeps one implementation of the
+  // geometry rather than a second one over here that could drift.
+  const sourceW = s.localMedia?.width ?? null;
+  const sourceH = s.localMedia?.height ?? null;
+  useEffect(() => {
+    if (!sourceW || !sourceH || s.aspect.ratio === "original") {
+      patch({ aspectPreview: null });
+      return;
+    }
+    let live = true;
+    // A loop preset caps the result, so the number on screen has to know about
+    // it or it would promise a size the file will not have.
+    ipc
+      .aspectPreview(sourceW, sourceH, s.aspect, isLoop ? s.loopSize : null)
+      .then((p) => live && patch({ aspectPreview: p }))
+      .catch(() => live && patch({ aspectPreview: null }));
+    return () => {
+      live = false;
+    };
+  }, [sourceW, sourceH, s.aspect, isLoop, s.loopSize, patch]);
 
   // ---- clip ---------------------------------------------------------------
   useEffect(() => {
@@ -368,7 +440,8 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
     !s.analyzing &&
     (s.screen === "url" || s.screen === "local") &&
     (!s.clipEnabled || !s.clipError) &&
-    !loopTooLong;
+    !loopTooLong &&
+    !aspectInvalid;
 
   // ---- actions ------------------------------------------------------------
   /**
@@ -391,6 +464,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
       outputDir: s.outputDir || null,
       compression: isImage ? s.compression : null,
       loopSize: isLoop ? s.loopSize : null,
+      aspect: showAspect ? s.aspect : null,
       destinationPath: null,
     };
 
@@ -425,7 +499,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
     } finally {
       setSaving(false);
     }
-  }, [canExport, saving, s.urlMedia, s.localMedia, s.quality, s.format, s.clipEnabled, s.clipIn, s.clipOut, s.outputDir, s.compression, s.loopSize, isImage, isLoop, patch]);
+  }, [canExport, saving, s.urlMedia, s.localMedia, s.quality, s.format, s.clipEnabled, s.clipIn, s.clipOut, s.outputDir, s.compression, s.loopSize, s.aspect, isImage, isLoop, showAspect, patch]);
 
   const cancel = useCallback(() => {
     const id = s.job?.id ?? jobRef.current;
@@ -468,6 +542,11 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
     loopNeedsTrim,
     loopTooLong,
     loopMaxSeconds,
+    showAspect,
+    aspectPreview: s.aspectPreview,
+    aspectUpscales,
+    padsTransparent,
+    aspectLocked,
     compressionChoices,
     submitUrl,
     openFilePicker,
@@ -505,6 +584,38 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
         return next;
       }),
     setCompression: (c) => patch({ compression: c }),
+    setAspectRatio: (ratio) =>
+      set((prev) => {
+        // Moving to Freeform seeds the fields with the source's own size, so
+        // the first thing shown is the truth rather than an empty box.
+        if (ratio === "freeform" && prev.aspect.ratio !== "freeform") {
+          return {
+            ...prev,
+            aspect: {
+              ...prev.aspect,
+              ratio,
+              width: prev.aspect.width ?? prev.localMedia?.width ?? null,
+              height: prev.aspect.height ?? prev.localMedia?.height ?? null,
+            },
+          };
+        }
+        return { ...prev, aspect: { ...prev.aspect, ratio } };
+      }),
+    setFrameMode: (frame) => set((prev) => ({ ...prev, aspect: { ...prev.aspect, frame } })),
+    setAspectSize: (side, value) =>
+      set((prev) => {
+        const next = { ...prev.aspect, [side]: value };
+        // With the lock on, the other side follows the source's proportions,
+        // which is what keeps a custom size from becoming a stretch by hand.
+        const sw = prev.localMedia?.width ?? null;
+        const sh = prev.localMedia?.height ?? null;
+        if (aspectLocked && value && sw && sh) {
+          if (side === "width") next.height = Math.max(1, Math.round((value * sh) / sw));
+          else next.width = Math.max(1, Math.round((value * sw) / sh));
+        }
+        return { ...prev, aspect: next };
+      }),
+    toggleAspectLock: () => setAspectLocked((v) => !v),
     setLoopSize: (l) => patch({ loopSize: l }),
     setQuality: (q) => patch({ quality: q }),
     toggleClip: () => set((prev) => ({ ...prev, clipEnabled: !prev.clipEnabled })),

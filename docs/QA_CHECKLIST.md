@@ -10,7 +10,10 @@ cd src-tauri && cargo test                                   # unit + pipeline
 cargo test --test url_pipeline -- --ignored --nocapture      # needs network
 ```
 
-- `cargo test --lib` — 44 tests: timestamp parsing and rejection, clip bounds,
+- `cargo test --lib` — 74 tests, including the whole `media::aspect` geometry:
+  ratio accuracy across five sources, no-stretch across every combination,
+  never-enlarge for presets, even dimensions, filter ordering, tiny sources, and
+  freeform validation. Plus: timestamp parsing and rejection, clip bounds,
   URL scheme rejection, filename sanitizing, collision-safe naming, remux vs
   transcode decisions, progress parsing, the palette-based GIF graph, **every
   loop frame rate dividing 100**, the 30s loop cap, silent-and-endless loop
@@ -66,6 +69,19 @@ from published sample/CC-BY sources.
 | 25 | Pick animated WEBP: trim arms at 15s, limit reads 30s | ✅ |
 | 26 | Set a 25s WEBP range then switch to GIF: range re-arms to 10s | ✅ no disabled dead-end |
 | 27 | OUTPUT row at 980×680 stays one row, grouped video / loop / audio | ✅ 9 chips, three runs |
+| 28 | ASPECT shows for video and images, never for audio | ✅ |
+| 29 | Original is selected by default on every new input | ✅ |
+| 30 | 9:16 Fill on a 1280×720 video | ✅ 404×720, SAR 1:1, audio kept, 20s intact |
+| 31 | 1:1 on a 1600×1200 photo | ✅ 1200×1200 |
+| 32 | GIF at 9:16 with the auto-armed trim | ✅ 268×480, flat 8cs, 125 frames, silent |
+| 33 | Freeform seeds the source size, Lock follows the proportions | ✅ 2560 → 1440 |
+| 34 | A freeform size larger than the source warns before export | ✅ amber note |
+| 35 | Deepest state (GIF + LOOP + ASPECT + trim) fits 980×680 unscrolled | ✅ |
+| 36 | PNG Fit pads transparently | ✅ corner RGBA 00000000, hasAlpha yes |
+| 37 | Video Fit pads opaque black | ✅ corner RGBA 000000ff |
+| 38 | Reframed video has square pixels | ✅ SAR 1:1 across four ratio/mode pairs |
+| 39 | Dimension label matches the exported file | ✅ 268 × 480 shown, 268×480 produced |
+| 40 | Fit wording follows the format (transparent vs black) | ✅ |
 
 ## Also verified
 

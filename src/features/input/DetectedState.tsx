@@ -4,7 +4,17 @@ import { TimeField } from "@/components/TimeField";
 import { Toggle } from "@/components/Toggle";
 import { formatBytes, formatDuration, parseTimestamp, resolutionLabel } from "@/lib/format";
 import { useShift } from "@/state/shift";
-import { isAnimationFormat, isAudioFormat, LOOP_SIZES, type OutputFormat } from "@/types";
+import { SizeField } from "@/components/SizeField";
+import {
+  ASPECT_ROWS,
+  aspectLabel,
+  isAnimationFormat,
+  isAudioFormat,
+  LOOP_SIZES,
+  MAX_DIMENSION,
+  MIN_DIMENSION,
+  type OutputFormat,
+} from "@/types";
 
 /**
  * States B and C in one layout, exactly as the design composes them: identity
@@ -21,7 +31,7 @@ export function DetectedState() {
       {/* Everything above Export is centred in the room it has, with a small
           upward bias — true centring reads as slightly low. Export itself stays
           pinned to the bottom. */}
-      <div className="flex min-h-0 flex-1 flex-col justify-center pb-[26px]">
+      <div className="flex min-h-0 flex-1 flex-col justify-center pb-[18px]">
         {/* ---- identity -------------------------------------------------- */}
       <div className="flex items-start gap-[14px]">
         {isUrl ? <Thumbnail /> : <FileBadge ext={local?.ext ?? ""} />}
@@ -67,83 +77,35 @@ export function DetectedState() {
         </button>
       </div>
 
-      <div className="my-[22px] h-px bg-[var(--hairline-faint)]" />
+      <div className="my-[18px] h-px bg-[var(--hairline-faint)]" />
 
       {/* ---- actions ------------------------------------------------------ */}
-      <div className="flex flex-col gap-[22px] overflow-y-auto">
+      <div className="flex flex-col gap-[18px] overflow-y-auto">
         <Section title="OUTPUT">
           <OutputChips />
         </Section>
 
         {s.isLoop && <LoopSection />}
 
-        {s.showQuality && (
-          <Section title="QUALITY">
-            <div className="flex flex-wrap gap-2">
-              {media?.qualities.map((q) => (
-                <Chip
-                  key={q.id}
-                  label={q.label}
-                  selected={s.quality === q.id}
-                  onClick={() => s.setQuality(q.id)}
-                />
-              ))}
+        {/* Shape on the left, everything that qualifies it on the right. The
+            window is wide and short, so the controls a visual export needs —
+            which is the deepest the interface ever gets — sit side by side
+            rather than running off the bottom. Audio, which has no shape, keeps
+            the plain single column. */}
+        {s.showAspect ? (
+          <div className="flex items-start gap-[28px]">
+            <div className="w-[228px] shrink-0">
+              <AspectRatios />
             </div>
-          </Section>
-        )}
-
-        {isUrl ? (
-          <div>
-            <div className="mb-[10px] flex items-center justify-between">
-              <div className="text-[11px] tracking-[0.08em] text-shift-label">CLIP</div>
-              <Toggle on={s.clipEnabled} onChange={s.toggleClip} label="Clip this media" />
+            <div className="flex min-w-0 flex-1 flex-col gap-[16px]">
+              {s.aspect.ratio !== "original" && <FrameControls />}
+              <Modifiers />
             </div>
-            {s.clipEnabled && <ClipControls showRange />}
           </div>
-        ) : s.isImage ? (
-          <Section title="COMPRESSION">
-            <div className="flex flex-wrap gap-2">
-              {s.compressionChoices.map((c) => (
-                <Chip
-                  key={c.id}
-                  label={c.label}
-                  selected={s.compression === c.id}
-                  onClick={() => s.setCompression(c.id)}
-                />
-              ))}
-            </div>
-            {s.format === "PNG" && (
-              <div className="mt-[10px] text-[11px] text-shift-ghost">
-                PNG is lossless — Optimize only recompresses, it never changes the image.
-              </div>
-            )}
-            {s.localMedia?.hasAlpha && (
-              <div className="mt-[10px] text-[11px] text-shift-ghost">
-                This image has transparency, so AVIF isn't offered — it can't carry it.
-              </div>
-            )}
-          </Section>
         ) : (
-          <Section title="TRANSFORM">
-            <div className="flex flex-wrap gap-2">
-              <Chip label="Trim" selected={s.clipEnabled} onClick={s.toggleClip} />
-              {local?.hasVideo && (
-                <Chip
-                  label="Extract audio"
-                  selected={s.extractAudio}
-                  onClick={() => s.setFormat(s.extractAudio ? "MP4" : "MP3")}
-                />
-              )}
-            </div>
-            {s.clipEnabled && (
-              <div className="mt-[14px]">
-                <ClipControls />
-              </div>
-            )}
-          </Section>
+          <Modifiers />
         )}
       </div>
-
       </div>
 
       {/* ---- export ------------------------------------------------------- */}
@@ -218,6 +180,209 @@ function OutputChips() {
 }
 
 /**
+ * Shape, for anything you can look at.
+ *
+ * Ratios are the primitive on purpose — no "TikTok" or "Reels" buttons, which
+ * would date the moment a platform changed its mind. Original leads and is the
+ * default, so the common case is one glance and no decision.
+ *
+ * There is no Stretch. A ratio change here is only ever a crop or a pad, which
+ * is why the second control is Fill/Fit rather than a list of scaling modes.
+ */
+/**
+ * Everything that qualifies the export but is not its shape: source quality,
+ * the clip range, audio extraction, image compression.
+ *
+ * Grouped into one component so the layout can place it in a column beside the
+ * aspect controls, or on its own for a source that has no shape at all.
+ */
+function Modifiers() {
+  const s = useShift();
+  const isUrl = s.screen === "url";
+  const local = s.localMedia;
+
+  return (
+    <div className="flex flex-col gap-[16px]">
+      {s.showQuality && (
+        <Section title="QUALITY">
+          <div className="flex flex-wrap gap-2">
+            {s.urlMedia?.qualities.map((q) => (
+              <Chip
+                key={q.id}
+                label={q.label}
+                selected={s.quality === q.id}
+                onClick={() => s.setQuality(q.id)}
+              />
+            ))}
+          </div>
+        </Section>
+      )}
+
+      {isUrl ? (
+        <div>
+          <div className="mb-[10px] flex items-center justify-between">
+            <div className="text-[11px] tracking-[0.08em] text-shift-label">CLIP</div>
+            <Toggle on={s.clipEnabled} onChange={s.toggleClip} label="Clip this media" />
+          </div>
+          {s.clipEnabled && <ClipControls showRange />}
+        </div>
+      ) : s.isImage ? (
+        <Section title="COMPRESSION">
+          <div className="flex flex-wrap gap-2">
+            {s.compressionChoices.map((c) => (
+              <Chip
+                key={c.id}
+                label={c.label}
+                selected={s.compression === c.id}
+                onClick={() => s.setCompression(c.id)}
+              />
+            ))}
+          </div>
+          {s.format === "PNG" && (
+            <div className="mt-[10px] text-[11px] text-shift-ghost">
+              PNG is lossless — Optimize only recompresses, it never changes the image.
+            </div>
+          )}
+          {local?.hasAlpha && (
+            <div className="mt-[10px] text-[11px] text-shift-ghost">
+              This image has transparency, so AVIF isn't offered — it can't carry it.
+            </div>
+          )}
+        </Section>
+      ) : (
+        <Section title="TRANSFORM">
+          <div className="flex flex-wrap gap-2">
+            <Chip label="Trim" selected={s.clipEnabled} onClick={s.toggleClip} />
+            {local?.hasVideo && (
+              <Chip
+                label="Extract audio"
+                selected={s.extractAudio}
+                onClick={() => s.setFormat(s.extractAudio ? "MP4" : "MP3")}
+              />
+            )}
+          </div>
+          {s.clipEnabled && (
+            <div className="mt-[12px]">
+              <ClipControls />
+            </div>
+          )}
+        </Section>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The ratios themselves.
+ *
+ * Ratios are the primitive on purpose — no "TikTok" or "Reels" buttons, which
+ * would date the moment a platform changed its mind. Original leads and is the
+ * default, so the common case is one glance and no decision.
+ */
+function AspectRatios() {
+  const s = useShift();
+  const size = s.aspectPreview;
+  return (
+    <div>
+      {/* The result, where the section is already looking. Informational only —
+          a line of type, not a control and not a card. It is simply absent for
+          Original, and for a URL whose size nobody knows yet. */}
+      <div className="mb-[10px] flex items-baseline justify-between gap-2">
+        <span className="text-[11px] tracking-[0.08em] text-shift-label">ASPECT</span>
+        {size && (
+          <span className="font-mono text-[11px] text-shift-ghost">
+            {size.width} × {size.height}
+          </span>
+        )}
+      </div>
+      <div className="grid grid-cols-2 gap-[6px]">
+        {ASPECT_ROWS.map((row) =>
+          row.map((r) => (
+            <div key={r} className={row.length === 1 ? "col-span-2" : undefined}>
+              <div className="[&>button]:w-full">
+                <Chip
+                  label={aspectLabel(r)}
+                  selected={s.aspect.ratio === r}
+                  onClick={() => s.setAspectRatio(r)}
+                />
+              </div>
+            </div>
+          )),
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * How the picture meets a frame it does not already fit.
+ *
+ * There is deliberately no Stretch: a ratio change here is only ever a crop or
+ * a pad, so the choice is which of those two, not how to distort.
+ */
+function FrameControls() {
+  const s = useShift();
+  const a = s.aspect;
+  const bad = (v: number | null) => v != null && (v < MIN_DIMENSION || v > MAX_DIMENSION);
+
+  return (
+    <div>
+      <div className="mb-[10px] text-[11px] tracking-[0.08em] text-shift-label">FRAME</div>
+      <div className="flex flex-wrap gap-2">
+        <Chip label="Fill" selected={a.frame === "fill"} onClick={() => s.setFrameMode("fill")} />
+        <Chip label="Fit" selected={a.frame === "fit"} onClick={() => s.setFrameMode("fit")} />
+      </div>
+      <div className="mt-[8px] text-[11px] leading-relaxed text-shift-ghost">
+        {a.frame === "fill"
+          ? "Crops to fill the frame. Nothing is stretched."
+          : s.padsTransparent
+            ? "Keeps the whole picture. The rest is left transparent."
+            : "Keeps the whole picture and pads the rest with black."}
+      </div>
+
+      {a.ratio === "freeform" && (
+        <div className="mt-[12px]">
+          <div className="flex items-end gap-[12px]">
+            <SizeField
+              label="WIDTH"
+              value={a.width}
+              onChange={(v) => s.setAspectSize("width", v)}
+              invalid={bad(a.width)}
+            />
+            <div className="mb-[9px] text-shift-ghost">×</div>
+            <SizeField
+              label="HEIGHT"
+              value={a.height}
+              onChange={(v) => s.setAspectSize("height", v)}
+              invalid={bad(a.height)}
+            />
+            <div className="mb-[2px]">
+              <Chip
+                label="Lock"
+                title="Keep the source's proportions while typing"
+                selected={s.aspectLocked}
+                onClick={s.toggleAspectLock}
+              />
+            </div>
+          </div>
+          {bad(a.width) || bad(a.height) ? (
+            <div className="mt-[8px] text-[11px] text-shift-danger">
+              Must be between {MIN_DIMENSION} and {MAX_DIMENSION}.
+            </div>
+          ) : (
+            s.aspectUpscales && (
+              <div className="mt-[8px] text-[11px] leading-relaxed text-[oklch(0.78_0.11_75)]">
+                Larger than the source — this enlarges the picture, it does not add detail.
+              </div>
+            )
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
  * The controls that only make sense once an output is a moving one.
  *
  * Deliberately a size, not a frame rate and a width: the two move together,
@@ -237,30 +402,36 @@ function LoopSection() {
 
   return (
     <Section title="LOOP">
-      <div className="flex flex-wrap gap-2">
-        {LOOP_SIZES.map((l) => (
-          <Chip
-            key={l.id}
-            label={l.label}
-            selected={s.loopSize === l.id}
-            onClick={() => s.setLoopSize(l.id)}
-          />
-        ))}
-      </div>
-      <div className="mt-[10px] text-[11px] text-shift-ghost">
-        {detail} · silent · loops forever. Never upscaled past the source.
-      </div>
-      {s.loopTooLong ? (
-        <div className="mt-[6px] text-[11px] text-shift-danger">
-          {name} is limited to {s.loopMaxSeconds} seconds — {reason}. Trim to fit.
+      {/* Same two-column shape as ASPECT: choices left, the words that explain
+          them to the right. Vertical room is the scarce dimension here. */}
+      <div className="flex items-start gap-[28px]">
+        <div className="flex w-[228px] shrink-0 flex-wrap gap-[6px]">
+          {LOOP_SIZES.map((l) => (
+            <Chip
+              key={l.id}
+              label={l.label}
+              selected={s.loopSize === l.id}
+              onClick={() => s.setLoopSize(l.id)}
+            />
+          ))}
         </div>
-      ) : (
-        s.loopNeedsTrim && (
-          <div className="mt-[6px] text-[11px] text-shift-ghost">
-            Trimmed to fit {name}'s {s.loopMaxSeconds}s limit — {reason}. Adjust the range below.
+        <div className="min-w-0 flex-1 pt-[3px] text-[11px] leading-relaxed">
+          <div className="text-shift-ghost">
+            {detail} · silent · loops forever. Never upscaled past the source.
           </div>
-        )
-      )}
+          {s.loopTooLong ? (
+            <div className="mt-[4px] text-shift-danger">
+              {name} is limited to {s.loopMaxSeconds} seconds — {reason}. Trim to fit.
+            </div>
+          ) : (
+            s.loopNeedsTrim && (
+              <div className="mt-[4px] text-shift-ghost">
+                Trimmed to fit {name}'s {s.loopMaxSeconds}s limit — {reason}.
+              </div>
+            )
+          )}
+        </div>
+      </div>
     </Section>
   );
 }

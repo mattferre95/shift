@@ -10,6 +10,7 @@
 //! is ever built from user input.
 
 use crate::errors::{Result, ShiftError};
+use crate::media::aspect::{self, AspectSpec, PadColor};
 use crate::media::profiles::OutputFormat;
 use crate::process::{run_capture, Binary, CancelToken};
 use serde::{Deserialize, Serialize};
@@ -165,7 +166,10 @@ pub enum ImageStep {
 #[derive(Debug, Clone)]
 pub struct ImagePlan {
     pub steps: Vec<ImageStep>,
-    /// True when no pixel data is discarded.
+    /// One label per step, so the progress screen describes what is actually
+    /// running instead of inferring it from how many passes there happen to be.
+    pub labels: Vec<String>,
+    /// True when the encoding discards no pixel data.
     pub lossless: bool,
 }
 
@@ -173,12 +177,15 @@ pub struct ImagePlan {
 ///
 /// `work_dir` holds the lossless intermediate when two passes are needed; it is
 /// inside the job's own temp directory and disappears with it.
+#[allow(clippy::too_many_arguments)]
 pub fn build_plan(
     input: &Path,
     source_format: &str,
     format: OutputFormat,
     compression: Compression,
     has_alpha: bool,
+    source_size: (u32, u32),
+    aspect_spec: &AspectSpec,
     work_dir: &Path,
     output: &Path,
 ) -> Result<ImagePlan> {
@@ -195,12 +202,47 @@ pub fn build_plan(
             .hint("Choose PNG or WEBP to keep it."));
     }
 
-    let src = source_format.to_ascii_lowercase();
+    let mut src = source_format.to_ascii_lowercase();
     // FFmpeg cannot decode HEIC/HEIF, so those always pass through sips first.
-    let needs_decode = src.starts_with("heic") || src.starts_with("heif");
+    let mut needs_decode = src.starts_with("heic") || src.starts_with("heif");
     let quality = compression.quality();
 
-    let steps = match format {
+    // ---- optional pre-passes ----------------------------------------------
+    //
+    // A reframe runs as its own lossless PNG pass rather than being folded into
+    // each format's conversion. That keeps one conversion path instead of two:
+    // the existing JPEG/PNG/WEBP/AVIF logic below is untouched and simply sees a
+    // PNG of the right shape as its input, with the quality ladders it already
+    // has still doing the encoding.
+    let reframe = aspect::resolve(source_size, aspect_spec)?;
+    let mut input = input.to_path_buf();
+    let mut steps: Vec<ImageStep> = Vec::new();
+    let mut labels: Vec<String> = Vec::new();
+
+    if let Some(r) = reframe {
+        if needs_decode {
+            // FFmpeg cannot read HEIC, so macOS decodes it first.
+            let decoded = work_dir.join("decoded.png");
+            steps.push(ImageStep::Sips(sips_args(&input, "png", None, &decoded)));
+            labels.push("Reading image…".into());
+            input = decoded;
+            needs_decode = false;
+        }
+        // Where the finished file can hold an alpha channel, Fit pads with
+        // nothing rather than with black. The source's own transparency is
+        // untouched either way — only the bars differ.
+        let pad = if keeps_alpha(format) { PadColor::Transparent } else { PadColor::Black };
+        let framed = work_dir.join("framed.png");
+        let chain = r.filters_with(pad).join(",");
+        let alpha = has_alpha || pad == PadColor::Transparent;
+        steps.push(ImageStep::Ffmpeg(reframe_args(&input, &chain, alpha, &framed)));
+        labels.push("Reframing…".into());
+        input = framed;
+        src = "png".into();
+    }
+    let input = input.as_path();
+
+    let convert = match format {
         // ---- JPEG: one sips pass; quality is the compression. --------------
         OutputFormat::Jpg => vec![ImageStep::Sips(sips_args(
             input,
@@ -254,8 +296,56 @@ pub fn build_plan(
         _ => unreachable!("guarded by is_image above"),
     };
 
+    // The conversion may itself be two passes (decode then encode); the second
+    // is the compression one whenever there is more than a single step.
     let lossless = matches!(format, OutputFormat::Png);
-    Ok(ImagePlan { steps, lossless })
+    for (i, _) in convert.iter().enumerate() {
+        labels.push(if i + 1 == convert.len() && convert.len() > 1 {
+            if lossless { "Optimizing…".into() } else { "Compressing…".into() }
+        } else {
+            "Converting…".into()
+        });
+    }
+    steps.extend(convert);
+
+    debug_assert_eq!(steps.len(), labels.len());
+    Ok(ImagePlan { steps, labels, lossless })
+}
+
+/// Whether an export in this format can carry transparency at all.
+///
+/// AVIF is absent deliberately: the bundled libaom-av1 advertises no alpha
+/// pixel format, which is the same fact that makes `build_plan` refuse a
+/// transparent source outright. JPEG has never had an alpha channel.
+pub fn keeps_alpha(format: OutputFormat) -> bool {
+    matches!(format, OutputFormat::Png | OutputFormat::Webp)
+}
+
+/// The reframe pass: crop/scale/pad into a lossless PNG the normal conversion
+/// then treats as its source.
+///
+/// `-pix_fmt rgba` is forced when the source carries transparency, or when the
+/// padding itself is meant to be transparent — otherwise the intermediate would
+/// have no alpha channel for either to survive in. An opaque photo headed for
+/// JPEG still gets no pointless alpha.
+fn reframe_args(input: &Path, filters: &str, has_alpha: bool, output: &Path) -> Vec<String> {
+    let mut args: Vec<String> = vec![
+        "-hide_banner".into(),
+        "-nostdin".into(),
+        "-y".into(),
+        "-i".into(),
+        input.to_string_lossy().to_string(),
+        "-vf".into(),
+        filters.to_string(),
+    ];
+    if has_alpha {
+        args.push("-pix_fmt".into());
+        args.push("rgba".into());
+    }
+    args.push("-frames:v".into());
+    args.push("1".into());
+    args.push(output.to_string_lossy().to_string());
+    args
 }
 
 fn sips_args(input: &Path, format: &str, quality: Option<u8>, output: &Path) -> Vec<String> {
@@ -352,6 +442,8 @@ mod tests {
             format,
             c,
             false,
+            (1200, 800),
+            &AspectSpec::default(),
             Path::new("/work"),
             Path::new("/out.img"),
         )
@@ -432,6 +524,8 @@ mod tests {
             OutputFormat::Mp4,
             Compression::None,
             false,
+            (1200, 800),
+            &AspectSpec::default(),
             Path::new("/w"),
             Path::new("/o.mp4")
         )
@@ -482,6 +576,8 @@ mod tests {
             OutputFormat::Avif,
             Compression::Balanced,
             true,
+            (1200, 800),
+            &AspectSpec::default(),
             Path::new("/w"),
             Path::new("/o.avif"),
         )
@@ -496,6 +592,8 @@ mod tests {
                 f,
                 Compression::Balanced,
                 true,
+                (1200, 800),
+                &AspectSpec::default(),
                 Path::new("/w"),
                 Path::new("/o.img"),
             )

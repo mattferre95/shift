@@ -73,6 +73,17 @@ Every export is named and placed through the native macOS Save panel, so the
 file lands exactly where you put it. Long jobs show real progress and can be
 cancelled.
 
+### Aspect
+
+- Reframe any visual export — video, loop or image — to **16:9 · 9:16 · 1:1 ·
+  4:5 · 4:3**, or an exact size of your own
+- **Fill** crops to the frame; **Fit** keeps the whole picture and pads the rest —
+  transparently for PNG and WEBP, black for everything else
+- Nothing is ever stretched, and the preset ratios never enlarge — they are cut
+  from the pixels the source already has
+- A custom size larger than the source says so, rather than quietly upscaling
+- The resulting dimensions are shown before you export
+
 ## Privacy
 
 **Local files stay on your Mac.** Video, audio and image transformations run

@@ -22,6 +22,20 @@ export const analyzeUrl = (url: string) => invoke<UrlMedia>("analyze_url", { url
 
 export const analyzeFile = (path: string) => invoke<LocalMedia>("analyze_file", { path });
 
+/** The dimensions an aspect choice would produce, or null when unknowable. */
+export const aspectPreview = (
+  sourceWidth: number,
+  sourceHeight: number,
+  spec: import("@/types").AspectSpec,
+  loopSize: import("@/types").LoopSize | null,
+) =>
+  invoke<import("@/types").AspectPreview | null>("aspect_preview", {
+    sourceWidth,
+    sourceHeight,
+    spec,
+    loopSize,
+  });
+
 export const validateClip = (start: string, end: string, duration: number | null) =>
   invoke<ClipCheck>("validate_clip", { start, end, duration });
 
