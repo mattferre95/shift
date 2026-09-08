@@ -181,12 +181,13 @@ impl UrlProvider for YtDlpProvider {
                 Ok(h) => format!("bv*[height<={h}]+ba/b[height<={h}]/bv*+ba/b"),
                 Err(_) => "bv*+ba/b".to_string(),
             },
-            // A small progressive MP4 reaches WebKit much sooner than the
-            // best separate HLS video+audio pair. The fallbacks retain broad
-            // provider support and the playback layer proxies only if probe
-            // shows that WebKit cannot decode what was returned.
+            // A small progressive MP4 reaches WebKit much sooner when a
+            // provider offers one. Some providers expose only separate video
+            // and audio streams, so retain a height-limited merged fallback.
+            // The playback layer proxies only if probe shows that WebKit
+            // cannot decode what was returned.
             DownloadKind::PreviewVideo => {
-                "b[ext=mp4][protocol=https][height<=540]/b[ext=mp4][height<=540]/b[height<=540]/b"
+                "b[ext=mp4][protocol=https][height<=540]/b[ext=mp4][height<=540]/bv*[height<=540]+ba/b[height<=540]/bv*+ba/b"
                     .to_string()
             }
             DownloadKind::PreviewAudio => "ba[ext=m4a]/ba[ext=mp4]/ba/b".to_string(),
