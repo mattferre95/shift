@@ -17,6 +17,23 @@ import type {
 } from "@/types";
 
 const JOB_EVENT = "shift://job";
+const PLAYBACK_EVENT = "shift://playback";
+
+export type PlaybackStage =
+  | "resolvingLink"
+  | "sourceSelected"
+  | "downloadingPreview"
+  | "mediaAvailable"
+  | "preparingPlayer"
+  | "proxying"
+  | "backendReady";
+
+export interface PlaybackEvent {
+  playbackId: string;
+  stage: PlaybackStage;
+  elapsedMs: number;
+  detail: string | null;
+}
 
 export const analyzeUrl = (url: string) => invoke<UrlMedia>("analyze_url", { url });
 
@@ -35,6 +52,13 @@ export const aspectPreview = (
     spec,
     loopSize,
   });
+
+/**
+ * A small cached image for the framing preview, inlined as a data URI.
+ * Never an export input. `at` is a position in seconds for moving media.
+ */
+export const previewSource = (path: string, at: number | null) =>
+  invoke<string>("preview_source", { path, at });
 
 export const validateClip = (start: string, end: string, duration: number | null) =>
   invoke<ClipCheck>("validate_clip", { start, end, duration });
@@ -83,3 +107,12 @@ export function toShiftError(e: unknown): import("@/types").ShiftError {
   console.error("[shift] unnormalized failure", e);
   return { code: "unknown", message: "Something went wrong.", hint: null, technical };
 }
+
+export const createPlayback = (input: ExportRequest["input"], knownMedia: UrlMedia | null = null) =>
+  invoke<string>("create_playback", { input, knownMedia });
+export const preparePlayback = (id: string, forceProxy: boolean) => invoke<import("@/state/playback").PlaybackInfo>("prepare_playback", { id, forceProxy });
+export const releasePlayback = (id: string) => invoke<void>("release_playback", { id });
+export const releaseUrlMedia = (thumbnailPath: string | null) =>
+  invoke<void>("release_url_media", { thumbnailPath });
+export const onPlaybackEvent = (handler: (event: PlaybackEvent) => void): Promise<UnlistenFn> =>
+  listen<PlaybackEvent>(PLAYBACK_EVENT, (e) => handler(e.payload));

@@ -8,12 +8,12 @@ pub mod ytdlp;
 
 use crate::errors::Result;
 use crate::process::CancelToken;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use url::Url;
 
 /// One selectable source quality.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QualityOption {
     /// Stable id passed back on export, e.g. `best` or `1080`.
@@ -23,7 +23,7 @@ pub struct QualityOption {
 }
 
 /// What SHIFT knows about a remote item after analysis (URL-02).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UrlMedia {
     /// Which provider produced this, so a second one stays distinguishable.
@@ -36,6 +36,10 @@ pub struct UrlMedia {
     pub thumbnail_path: Option<String>,
     pub qualities: Vec<QualityOption>,
     pub has_video: bool,
+    /// The source frame size, when the provider reports it. Lets the aspect
+    /// controls give real dimensions before anything is fetched.
+    pub width: Option<u32>,
+    pub height: Option<u32>,
 }
 
 /// What a download should produce.
@@ -45,6 +49,12 @@ pub enum DownloadKind {
     Video,
     /// Best audio-only stream; SHIFT converts it afterwards.
     Audio,
+    /// Small, directly playable video for the trim player. It may be lower
+    /// quality than the eventual export and is only reused when its measured
+    /// dimensions prove it satisfies the export request.
+    PreviewVideo,
+    /// Small audio-only source for the trim player.
+    PreviewAudio,
 }
 
 pub trait UrlProvider: Send + Sync {

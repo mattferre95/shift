@@ -291,7 +291,10 @@ fn audio_codec_fits(container: OutputFormat, codec: &str) -> bool {
     let c = codec.to_ascii_lowercase();
     match container {
         OutputFormat::Mp4 | OutputFormat::M4a => matches!(c.as_str(), "aac" | "mp3" | "alac"),
-        OutputFormat::Mov => matches!(c.as_str(), "aac" | "alac" | "pcm_s16le" | "pcm_s24le" | "mp3"),
+        OutputFormat::Mov => matches!(
+            c.as_str(),
+            "aac" | "alac" | "pcm_s16le" | "pcm_s24le" | "mp3"
+        ),
         OutputFormat::Webm => matches!(c.as_str(), "opus" | "vorbis"),
         OutputFormat::Mp3 => c == "mp3",
         OutputFormat::Aac => c == "aac",
@@ -330,8 +333,10 @@ pub fn build_plan(
     output: &Path,
 ) -> Result<EncodePlan> {
     if format.is_audio_only() && probe.audio.is_none() {
-        return Err(ShiftError::new("no_audio", "This file has no audio to extract.")
-            .hint("Choose a video output format instead."));
+        return Err(
+            ShiftError::new("no_audio", "This file has no audio to extract.")
+                .hint("Choose a video output format instead."),
+        );
     }
     if !format.is_audio_only() && !probe.has_video() {
         return Err(ShiftError::new("no_video", "This is an audio file.")
@@ -351,8 +356,10 @@ pub fn build_plan(
         return build_loop_plan(input, probe, format, clip, loop_size, reframe, output);
     }
     if format.is_image() {
-        return Err(ShiftError::new("image_from_av", "That output is an image format.")
-            .hint("Choose a video or audio format for this file."));
+        return Err(
+            ShiftError::new("image_from_av", "That output is an image format.")
+                .hint("Choose a video or audio format for this file."),
+        );
     }
 
     let mut args: Vec<String> = vec!["-hide_banner".into(), "-nostdin".into(), "-y".into()];
@@ -374,6 +381,8 @@ pub fn build_plan(
     let mut remuxed = false;
 
     if format.is_audio_only() {
+        // Match ffprobe and the player: the first audio stream is authoritative.
+        args.extend(["-map".into(), "0:a:0".into()]);
         args.push("-vn".into());
         let src = probe.audio.as_ref().map(|a| a.codec.as_str()).unwrap_or("");
         // A straight container change (M4A from an AAC source) can copy.
@@ -394,14 +403,18 @@ pub fn build_plan(
         let a_src = probe.audio.as_ref().map(|a| a.codec.as_str()).unwrap_or("");
         // A reframe rewrites every pixel, so there is nothing left to copy.
         let can_copy_video = !trimming && reframe.is_none() && video_codec_fits(format, v_src);
-        let can_copy_audio = probe.audio.is_none() || (!trimming && audio_codec_fits(format, a_src));
+        let can_copy_audio =
+            probe.audio.is_none() || (!trimming && audio_codec_fits(format, a_src));
 
         if can_copy_video && can_copy_audio {
             args.push("-c".into());
             args.push("copy".into());
             remuxed = true;
         } else {
-            if let Some(chain) = reframe.map(|r| r.filters().join(",")).filter(|c| !c.is_empty()) {
+            if let Some(chain) = reframe
+                .map(|r| r.filters().join(","))
+                .filter(|c| !c.is_empty())
+            {
                 args.push("-vf".into());
                 args.push(chain);
             }
@@ -550,17 +563,30 @@ fn build_loop_plan(
     args.push("-nostats".into());
     args.push(output.to_string_lossy().to_string());
 
-    Ok(EncodePlan { args, remuxed: false })
+    Ok(EncodePlan {
+        args,
+        remuxed: false,
+    })
 }
 
 fn audio_encoder(format: OutputFormat) -> Vec<String> {
     match format {
-        OutputFormat::Mp3 => vec!["-c:a".into(), "libmp3lame".into(), "-q:a".into(), "2".into()],
+        OutputFormat::Mp3 => vec![
+            "-c:a".into(),
+            "libmp3lame".into(),
+            "-q:a".into(),
+            "2".into(),
+        ],
         OutputFormat::Wav => vec!["-c:a".into(), "pcm_s16le".into()],
         // Level 8 is the archival default and measured no slower than the
         // level-5 default on real material, for ~0.3% less size.
         OutputFormat::Flac => {
-            vec!["-c:a".into(), "flac".into(), "-compression_level".into(), "8".into()]
+            vec![
+                "-c:a".into(),
+                "flac".into(),
+                "-compression_level".into(),
+                "8".into(),
+            ]
         }
         OutputFormat::M4a | OutputFormat::Aac => {
             vec!["-c:a".into(), "aac".into(), "-b:a".into(), "192k".into()]
@@ -571,7 +597,12 @@ fn audio_encoder(format: OutputFormat) -> Vec<String> {
 
 fn container_audio_encoder(format: OutputFormat) -> Vec<String> {
     match format {
-        OutputFormat::Webm => vec!["-c:a".into(), "libopus".into(), "-b:a".into(), "128k".into()],
+        OutputFormat::Webm => vec![
+            "-c:a".into(),
+            "libopus".into(),
+            "-b:a".into(),
+            "128k".into(),
+        ],
         _ => vec!["-c:a".into(), "aac".into(), "-b:a".into(), "192k".into()],
     }
 }
@@ -631,8 +662,16 @@ mod tests {
             duration: Some(43.0),
             container: "mov".into(),
             size_bytes: 1000,
-            video: Some(StreamInfo { codec: "h264".into(), width: Some(1920), height: Some(1080) }),
-            audio: Some(StreamInfo { codec: "aac".into(), width: None, height: None }),
+            video: Some(StreamInfo {
+                codec: "h264".into(),
+                width: Some(1920),
+                height: Some(1080),
+            }),
+            audio: Some(StreamInfo {
+                codec: "aac".into(),
+                width: None,
+                height: None,
+            }),
         }
     }
 
@@ -652,7 +691,10 @@ mod tests {
 
     #[test]
     fn trimming_forces_a_re_encode_for_accuracy() {
-        let clip = ClipRange { start: 172.0, end: 176.0 };
+        let clip = ClipRange {
+            start: 172.0,
+            end: 176.0,
+        };
         let plan = plan(&h264_mov(), OutputFormat::Mp4, Some(clip)).unwrap();
         assert!(!plan.remuxed);
         assert!(plan.args.windows(2).any(|w| w == ["-ss", "172.000"]));
@@ -673,7 +715,11 @@ mod tests {
             container: "mp3".into(),
             size_bytes: 10,
             video: None,
-            audio: Some(StreamInfo { codec: "mp3".into(), width: None, height: None }),
+            audio: Some(StreamInfo {
+                codec: "mp3".into(),
+                width: None,
+                height: None,
+            }),
         };
         assert!(plan(&audio, OutputFormat::Mp4, None).is_err());
     }
@@ -688,8 +734,17 @@ mod tests {
     fn a_gif_is_built_from_a_palette_not_a_plain_filter() {
         // A single-pass GIF uses a fixed heuristic palette and bands badly, so
         // the two-stage graph is the whole point of this path.
-        let args = args_of(OutputFormat::Gif, Some(ClipRange { start: 0.0, end: 4.0 }));
-        let graph = args.iter().find(|a| a.contains("palettegen")).expect("palette graph");
+        let args = args_of(
+            OutputFormat::Gif,
+            Some(ClipRange {
+                start: 0.0,
+                end: 4.0,
+            }),
+        );
+        let graph = args
+            .iter()
+            .find(|a| a.contains("palettegen"))
+            .expect("palette graph");
         assert!(graph.contains("split[a][b]"));
         assert!(graph.contains("[a]palettegen=stats_mode=full[p]"));
         assert!(graph.contains("[b][p]paletteuse=dither=sierra2_4a[out]"));
@@ -700,15 +755,30 @@ mod tests {
     #[test]
     fn a_loop_is_silent_and_endless() {
         for f in [OutputFormat::Gif, OutputFormat::Webp] {
-            let args = args_of(f, Some(ClipRange { start: 0.0, end: 4.0 }));
+            let args = args_of(
+                f,
+                Some(ClipRange {
+                    start: 0.0,
+                    end: 4.0,
+                }),
+            );
             assert!(args.iter().any(|a| a == "-an"), "{f:?} must drop audio");
-            assert!(args.windows(2).any(|w| w == ["-loop", "0"]), "{f:?} must loop forever");
+            assert!(
+                args.windows(2).any(|w| w == ["-loop", "0"]),
+                "{f:?} must loop forever"
+            );
         }
     }
 
     #[test]
     fn an_animated_webp_uses_the_animated_encoder() {
-        let args = args_of(OutputFormat::Webp, Some(ClipRange { start: 0.0, end: 4.0 }));
+        let args = args_of(
+            OutputFormat::Webp,
+            Some(ClipRange {
+                start: 0.0,
+                end: 4.0,
+            }),
+        );
         assert!(args.iter().any(|a| a == "libwebp_anim"));
         // The still encoder would silently produce a one-frame file.
         assert!(!args.iter().any(|a| a == "libwebp"));
@@ -717,18 +787,43 @@ mod tests {
     #[test]
     fn a_loop_sizes_itself_from_the_source_and_never_upscales() {
         // 1920x1080 capped at the Standard preset's 480 longest edge.
-        let args = args_of(OutputFormat::Gif, Some(ClipRange { start: 0.0, end: 4.0 }));
+        let args = args_of(
+            OutputFormat::Gif,
+            Some(ClipRange {
+                start: 0.0,
+                end: 4.0,
+            }),
+        );
         let graph = args.iter().find(|a| a.contains("scale=")).expect("scale");
         assert!(graph.contains("scale=480:270"), "{graph}");
 
         // A source already smaller than the preset is left alone entirely.
         let small = MediaProbe {
-            video: Some(StreamInfo { codec: "h264".into(), width: Some(200), height: Some(120) }),
+            video: Some(StreamInfo {
+                codec: "h264".into(),
+                width: Some(200),
+                height: Some(120),
+            }),
             ..h264_mov()
         };
-        let plan = plan(&small, OutputFormat::Gif, Some(ClipRange { start: 0.0, end: 4.0 })).unwrap();
-        let graph = plan.args.iter().find(|a| a.contains("fps=")).expect("chain");
-        assert!(!graph.contains("scale="), "a 200px source needs no scaling: {graph}");
+        let plan = plan(
+            &small,
+            OutputFormat::Gif,
+            Some(ClipRange {
+                start: 0.0,
+                end: 4.0,
+            }),
+        )
+        .unwrap();
+        let graph = plan
+            .args
+            .iter()
+            .find(|a| a.contains("fps="))
+            .expect("chain");
+        assert!(
+            !graph.contains("scale="),
+            "a 200px source needs no scaling: {graph}"
+        );
     }
 
     #[test]
@@ -736,12 +831,27 @@ mod tests {
         // A portrait source must not come out three times the pixels of a
         // landscape one at the same preset — the length limits assume weight.
         let portrait = MediaProbe {
-            video: Some(StreamInfo { codec: "h264".into(), width: Some(1080), height: Some(1920) }),
+            video: Some(StreamInfo {
+                codec: "h264".into(),
+                width: Some(1080),
+                height: Some(1920),
+            }),
             ..h264_mov()
         };
-        let plan =
-            plan(&portrait, OutputFormat::Gif, Some(ClipRange { start: 0.0, end: 4.0 })).unwrap();
-        let graph = plan.args.iter().find(|a| a.contains("scale=")).expect("scale");
+        let plan = plan(
+            &portrait,
+            OutputFormat::Gif,
+            Some(ClipRange {
+                start: 0.0,
+                end: 4.0,
+            }),
+        )
+        .unwrap();
+        let graph = plan
+            .args
+            .iter()
+            .find(|a| a.contains("scale="))
+            .expect("scale");
         assert!(graph.contains("scale=270:480"), "{graph}");
     }
 
@@ -759,13 +869,20 @@ mod tests {
             Path::new("/in.mov"),
             &h264_mov(),
             OutputFormat::Gif,
-            Some(ClipRange { start: 0.0, end: 4.0 }),
+            Some(ClipRange {
+                start: 0.0,
+                end: 4.0,
+            }),
             LoopSize::default(),
             &spec,
             Path::new("/out.gif"),
         )
         .unwrap();
-        let graph = plan.args.iter().find(|a| a.contains("palettegen")).expect("graph");
+        let graph = plan
+            .args
+            .iter()
+            .find(|a| a.contains("palettegen"))
+            .expect("graph");
         let crop = graph.find("crop=").expect("a crop");
         let palette = graph.find("palettegen").expect("palettegen");
         assert!(crop < palette, "crop must precede palettegen: {graph}");
@@ -782,18 +899,31 @@ mod tests {
         for size in loop_options() {
             let fps: f64 = size.fps().parse().expect("numeric fps");
             let cs = 100.0 / fps;
-            assert_eq!(cs, cs.round(), "{:?} at {} fps is {cs} centiseconds", size, size.fps());
+            assert_eq!(
+                cs,
+                cs.round(),
+                "{:?} at {} fps is {cs} centiseconds",
+                size,
+                size.fps()
+            );
         }
     }
 
     #[test]
     fn each_loop_format_is_capped_at_its_own_limit() {
-        for (format, limit) in
-            [(OutputFormat::Gif, MAX_GIF_SECONDS), (OutputFormat::Webp, MAX_WEBP_LOOP_SECONDS)]
-        {
-            let long = MediaProbe { duration: Some(limit + 1.0), ..h264_mov() };
+        for (format, limit) in [
+            (OutputFormat::Gif, MAX_GIF_SECONDS),
+            (OutputFormat::Webp, MAX_WEBP_LOOP_SECONDS),
+        ] {
+            let long = MediaProbe {
+                duration: Some(limit + 1.0),
+                ..h264_mov()
+            };
             let err = plan(&long, format, None).unwrap_err();
-            assert_eq!(err.code, "loop_too_long", "{format:?} should refuse {limit}s + 1");
+            assert_eq!(
+                err.code, "loop_too_long",
+                "{format:?} should refuse {limit}s + 1"
+            );
             assert!(
                 err.message.contains(&format!("{limit:.0}")),
                 "the message must name the real limit: {}",
@@ -801,8 +931,14 @@ mod tests {
             );
 
             // Trimming to exactly the limit is what makes it work.
-            let clip = ClipRange { start: 0.0, end: limit };
-            assert!(plan(&long, format, Some(clip)).is_ok(), "{format:?} at exactly {limit}s");
+            let clip = ClipRange {
+                start: 0.0,
+                end: limit,
+            };
+            assert!(
+                plan(&long, format, Some(clip)).is_ok(),
+                "{format:?} at exactly {limit}s"
+            );
         }
     }
 
@@ -816,8 +952,14 @@ mod tests {
         assert!(DEFAULT_WEBP_LOOP_SECONDS < MAX_WEBP_LOOP_SECONDS);
 
         // A 20s range is fine as a WEBP and too long as a GIF.
-        let long = MediaProbe { duration: Some(60.0), ..h264_mov() };
-        let clip = ClipRange { start: 0.0, end: 20.0 };
+        let long = MediaProbe {
+            duration: Some(60.0),
+            ..h264_mov()
+        };
+        let clip = ClipRange {
+            start: 0.0,
+            end: 20.0,
+        };
         assert!(plan(&long, OutputFormat::Webp, Some(clip)).is_ok());
         assert!(plan(&long, OutputFormat::Gif, Some(clip)).is_err());
 
@@ -827,7 +969,12 @@ mod tests {
 
     #[test]
     fn only_loop_formats_carry_a_limit() {
-        for f in [OutputFormat::Mp4, OutputFormat::Mp3, OutputFormat::M4a, OutputFormat::Jpg] {
+        for f in [
+            OutputFormat::Mp4,
+            OutputFormat::Mp3,
+            OutputFormat::M4a,
+            OutputFormat::Jpg,
+        ] {
             assert!(f.max_loop_seconds().is_none(), "{f:?} is not a loop format");
             assert!(f.default_loop_seconds().is_none());
         }
@@ -840,7 +987,11 @@ mod tests {
             container: "mp3".into(),
             size_bytes: 10,
             video: None,
-            audio: Some(StreamInfo { codec: "mp3".into(), width: None, height: None }),
+            audio: Some(StreamInfo {
+                codec: "mp3".into(),
+                width: None,
+                height: None,
+            }),
         };
         assert!(plan(&audio, OutputFormat::Gif, None).is_err());
         assert!(plan(&audio, OutputFormat::Webp, None).is_err());
@@ -854,7 +1005,11 @@ mod tests {
         probe.video = None;
 
         // AAC in, M4A out, no trim: the same audio, a different wrapper.
-        probe.audio = Some(StreamInfo { codec: "aac".into(), width: None, height: None });
+        probe.audio = Some(StreamInfo {
+            codec: "aac".into(),
+            width: None,
+            height: None,
+        });
         let copied = plan(&probe, OutputFormat::M4a, None).unwrap();
         assert!(copied.remuxed);
         assert!(copied.args.windows(2).any(|w| w == ["-c:a", "copy"]));
@@ -863,15 +1018,29 @@ mod tests {
         // Lossless, a different product from the AAC the chip promises. Both
         // must re-encode rather than be waved through.
         for codec in ["mp3", "alac", "pcm_s16le", "flac", "vorbis"] {
-            probe.audio = Some(StreamInfo { codec: codec.into(), width: None, height: None });
+            probe.audio = Some(StreamInfo {
+                codec: codec.into(),
+                width: None,
+                height: None,
+            });
             let p = plan(&probe, OutputFormat::M4a, None).unwrap();
             assert!(!p.remuxed, "{codec} → M4A must re-encode, not copy");
-            assert!(p.args.iter().any(|a| a == "aac"), "{codec} → M4A must encode AAC");
+            assert!(
+                p.args.iter().any(|a| a == "aac"),
+                "{codec} → M4A must encode AAC"
+            );
         }
 
         // Trimming always re-encodes, even from AAC.
-        probe.audio = Some(StreamInfo { codec: "aac".into(), width: None, height: None });
-        let clip = ClipRange { start: 1.0, end: 2.0 };
+        probe.audio = Some(StreamInfo {
+            codec: "aac".into(),
+            width: None,
+            height: None,
+        });
+        let clip = ClipRange {
+            start: 1.0,
+            end: 2.0,
+        };
         assert!(!plan(&probe, OutputFormat::M4a, Some(clip)).unwrap().remuxed);
     }
 
@@ -885,10 +1054,17 @@ mod tests {
             container: "mp3".into(),
             size_bytes: 10,
             video: None,
-            audio: Some(StreamInfo { codec: "mp3".into(), width: None, height: None }),
+            audio: Some(StreamInfo {
+                codec: "mp3".into(),
+                width: None,
+                height: None,
+            }),
         };
         for outputs in [options_for(&h264_mov()), options_for(&audio)] {
-            assert!(!outputs.contains(&OutputFormat::Aac), "raw AAC must not be offered");
+            assert!(
+                !outputs.contains(&OutputFormat::Aac),
+                "raw AAC must not be offered"
+            );
             assert!(outputs.contains(&OutputFormat::M4a));
         }
         // It is still a format SHIFT understands, just not one it offers.
@@ -905,7 +1081,11 @@ mod tests {
             container: "mp3".into(),
             size_bytes: 10,
             video: None,
-            audio: Some(StreamInfo { codec: "mp3".into(), width: None, height: None }),
+            audio: Some(StreamInfo {
+                codec: "mp3".into(),
+                width: None,
+                height: None,
+            }),
         };
         assert!(options_for(&audio).contains(&OutputFormat::M4a));
     }
@@ -915,7 +1095,10 @@ mod tests {
         // An MP4 container with its index at the end has to be fully downloaded
         // before it will play.
         let plan_ = plan(&h264_mov(), OutputFormat::M4a, None).unwrap();
-        assert!(plan_.args.windows(2).any(|w| w == ["-movflags", "+faststart"]));
+        assert!(plan_
+            .args
+            .windows(2)
+            .any(|w| w == ["-movflags", "+faststart"]));
     }
 
     #[test]
@@ -928,7 +1111,11 @@ mod tests {
         // FLAC in, FLAC out, no trim: nothing to re-encode.
         let mut flac_src = h264_mov();
         flac_src.video = None;
-        flac_src.audio = Some(StreamInfo { codec: "flac".into(), width: None, height: None });
+        flac_src.audio = Some(StreamInfo {
+            codec: "flac".into(),
+            width: None,
+            height: None,
+        });
         assert!(plan(&flac_src, OutputFormat::Flac, None).unwrap().remuxed);
     }
 
@@ -936,12 +1123,54 @@ mod tests {
     fn an_image_output_is_still_refused_for_a_video_source() {
         // WEBP is the exception, because it is also an animation.
         for f in [OutputFormat::Jpg, OutputFormat::Png, OutputFormat::Avif] {
-            assert!(plan(&h264_mov(), f, None).is_err(), "{f:?} is not a video output");
+            assert!(
+                plan(&h264_mov(), f, None).is_err(),
+                "{f:?} is not a video output"
+            );
         }
         // The 43s fixture is over the loop cap, so WEBP needs a trim to pass —
         // which is itself the point: it took the animation path, not the
         // image one.
-        let clip = ClipRange { start: 0.0, end: 4.0 };
+        let clip = ClipRange {
+            start: 0.0,
+            end: 4.0,
+        };
         assert!(plan(&h264_mov(), OutputFormat::Webp, Some(clip)).is_ok());
+    }
+}
+
+/// Preview encodes are deliberately independent from export profiles.
+pub fn playback_plan(input: &Path, probe: &MediaProbe, output: &Path) -> EncodePlan {
+    let mut args: Vec<String> = ["-hide_banner", "-nostdin", "-y", "-i"]
+        .into_iter()
+        .map(String::from)
+        .collect();
+    args.push(input.to_string_lossy().into_owned());
+    if probe.has_video() {
+        args.extend(["-map", "0:V:0", "-map", "0:a:0?", "-vf", "scale=w='min(iw,960)':h='min(ih,540)':force_original_aspect_ratio=decrease:force_divisible_by=2,setsar=1", "-c:v", "libx264", "-preset", "veryfast", "-crf", "25", "-pix_fmt", "yuv420p"].into_iter().map(String::from));
+    } else {
+        args.extend(["-vn", "-map", "0:a:0"].into_iter().map(String::from));
+    }
+    args.extend(
+        [
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            "-ac",
+            "2",
+            "-movflags",
+            "+faststart",
+            "-progress",
+            "pipe:1",
+            "-nostats",
+        ]
+        .into_iter()
+        .map(String::from),
+    );
+    args.push(output.to_string_lossy().into_owned());
+    EncodePlan {
+        args,
+        remuxed: false,
     }
 }

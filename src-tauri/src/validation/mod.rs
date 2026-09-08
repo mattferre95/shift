@@ -30,7 +30,9 @@ pub fn validate_url(raw: &str) -> Result<Url> {
 pub fn parse_timestamp(raw: &str) -> Result<f64> {
     let s = raw.trim();
     if s.is_empty() {
-        return Err(ShiftError::validation("Enter a timestamp such as 02:52.000."));
+        return Err(ShiftError::validation(
+            "Enter a timestamp such as 02:52.000.",
+        ));
     }
     let bad = || ShiftError::validation(format!("\u{201c}{s}\u{201d} isn't a valid timestamp."));
 
@@ -84,11 +86,11 @@ pub fn validate_clip(start_raw: &str, end_raw: &str, duration: Option<f64>) -> R
         return Err(ShiftError::validation("OUT has to come after IN."));
     }
     if let Some(d) = duration {
-        // Allow a small tolerance: probed durations are approximate.
+        // Only tolerate rounding to the UI’s millisecond precision.
         if d > 0.0 && start >= d {
             return Err(ShiftError::validation("IN is past the end of this media."));
         }
-        if d > 0.0 && end > d + 0.5 {
+        if d > 0.0 && end > d + 0.001 {
             return Err(ShiftError::validation("OUT is past the end of this media."));
         }
     }
@@ -128,11 +130,15 @@ pub fn timestamp_tag(seconds: f64) -> String {
 /// Accept only an existing regular file, resolved to a canonical absolute path.
 pub fn validate_input_path(raw: &str) -> Result<PathBuf> {
     let p = Path::new(raw);
-    let canonical = p
-        .canonicalize()
-        .map_err(|e| ShiftError::new("missing_file", "SHIFT can't find that file.").technical(format!("{raw}: {e}")))?;
+    let canonical = p.canonicalize().map_err(|e| {
+        ShiftError::new("missing_file", "SHIFT can't find that file.")
+            .technical(format!("{raw}: {e}"))
+    })?;
     if !canonical.is_file() {
-        return Err(ShiftError::new("not_a_file", "That isn't a file SHIFT can open."));
+        return Err(ShiftError::new(
+            "not_a_file",
+            "That isn't a file SHIFT can open.",
+        ));
     }
     Ok(canonical)
 }
@@ -146,7 +152,10 @@ pub fn validate_output_dir(raw: &str) -> Result<PathBuf> {
             .technical(format!("{raw}: {e}"))
     })?;
     if !canonical.is_dir() {
-        return Err(ShiftError::new("not_a_dir", "That destination isn't a folder."));
+        return Err(ShiftError::new(
+            "not_a_dir",
+            "That destination isn't a folder.",
+        ));
     }
     Ok(canonical)
 }
@@ -169,10 +178,16 @@ pub fn normalize_destination(raw: &str, target_ext: &str) -> Result<PathBuf> {
         return Err(ShiftError::validation("That isn't a valid filename."));
     }
 
-    let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).ok_or_else(|| {
-        ShiftError::new("no_destination_dir", "SHIFT couldn't work out where to save that.")
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .ok_or_else(|| {
+            ShiftError::new(
+                "no_destination_dir",
+                "SHIFT couldn't work out where to save that.",
+            )
             .hint("Choose a folder in the Save panel.")
-    })?;
+        })?;
     // Resolve the folder now so a directory removed between choosing and saving
     // is reported before any work starts.
     let parent = validate_output_dir(&parent.to_string_lossy())?;
@@ -193,7 +208,10 @@ pub fn normalize_destination(raw: &str, target_ext: &str) -> Result<PathBuf> {
         name
     } else if KNOWN_EXTS.contains(&current_ext.as_str()) {
         // A different SHIFT format: replace it, never let the two disagree.
-        let stem = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or(name);
+        let stem = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or(name);
         format!("{stem}.{target}")
     } else {
         // Not an extension we own (or none at all): keep the name intact and
@@ -239,7 +257,16 @@ mod tests {
 
     #[test]
     fn rejects_junk_timestamps() {
-        for bad in ["", "abc", "1:2:3:4", "-5", "02::52", "02:99", "01:75:00", "1:2:3.5:4"] {
+        for bad in [
+            "",
+            "abc",
+            "1:2:3:4",
+            "-5",
+            "02::52",
+            "02:99",
+            "01:75:00",
+            "1:2:3.5:4",
+        ] {
             assert!(parse_timestamp(bad).is_err(), "{bad} should be rejected");
         }
     }
@@ -255,7 +282,13 @@ mod tests {
     #[test]
     fn rejects_non_http_urls() {
         assert!(validate_url("https://example.com/watch?v=1").is_ok());
-        for bad in ["file:///etc/passwd", "javascript:alert(1)", "", "not a url", "ftp://x/y"] {
+        for bad in [
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "",
+            "not a url",
+            "ftp://x/y",
+        ] {
             assert!(validate_url(bad).is_err(), "{bad} should be rejected");
         }
     }

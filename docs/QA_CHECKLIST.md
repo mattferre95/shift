@@ -82,6 +82,13 @@ from published sample/CC-BY sources.
 | 38 | Reframed video has square pixels | ✅ SAR 1:1 across four ratio/mode pairs |
 | 39 | Dimension label matches the exported file | ✅ 268 × 480 shown, 268×480 produced |
 | 40 | Fit wording follows the format (transparent vs black) | ✅ |
+| 41 | PREVIEW appears only when ASPECT is not Original | ✅ |
+| 42 | Image preview shows the real centre crop | ✅ 9:16 Fill on 1600×900 |
+| 43 | JPG Fit preview shows black bars; PNG Fit shows the checkerboard | ✅ |
+| 44 | Viewport matches the output ratio (16:9, 9:16, 1:1, 4:5) | ✅ |
+| 45 | Video preview shows a real extracted frame at the IN point | ✅ |
+| 46 | GIF preview reports the loop-capped size | ✅ 268 × 480 |
+| 47 | Deepest state (GIF + LOOP + ASPECT + PREVIEW + trim) fits 980×680 | ✅ no scrollbar |
 
 ## Also verified
 

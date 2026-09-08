@@ -9,7 +9,10 @@ use crate::errors::{Result, ShiftError};
 use crate::filesystem::{self, TempDir};
 use crate::media::aspect::{AspectRatio, AspectSpec, FrameMode};
 use crate::media::image::{self, Compression};
-use crate::media::{ffmpeg, ffprobe, profiles::{self, LoopSize, OutputFormat}};
+use crate::media::{
+    ffmpeg, ffprobe,
+    profiles::{self, LoopSize, OutputFormat},
+};
 use crate::process::{Binary, CancelToken};
 use crate::providers::{self, DownloadKind};
 use crate::settings::SettingsStore;
@@ -41,14 +44,34 @@ pub enum JobState {
 #[serde(rename_all = "camelCase", tag = "action")]
 pub enum ActionSpec {
     Analyze,
-    Download { kind: &'static str, quality: String },
-    Trim { start: f64, end: f64 },
-    Convert { format: OutputFormat },
-    ExtractAudio { format: OutputFormat },
-    ConvertImage { format: OutputFormat },
-    CompressImage { level: Compression },
-    MakeLoop { format: OutputFormat, size: LoopSize },
-    Reframe { ratio: AspectRatio, frame: FrameMode },
+    Download {
+        kind: &'static str,
+        quality: String,
+    },
+    Trim {
+        start: f64,
+        end: f64,
+    },
+    Convert {
+        format: OutputFormat,
+    },
+    ExtractAudio {
+        format: OutputFormat,
+    },
+    ConvertImage {
+        format: OutputFormat,
+    },
+    CompressImage {
+        level: Compression,
+    },
+    MakeLoop {
+        format: OutputFormat,
+        size: LoopSize,
+    },
+    Reframe {
+        ratio: AspectRatio,
+        frame: FrameMode,
+    },
 }
 
 // ------------------------------------------------------------------- request
@@ -56,8 +79,13 @@ pub enum ActionSpec {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum InputSpec {
-    Url { url: String, quality: Option<String> },
-    Local { path: String },
+    Url {
+        url: String,
+        quality: Option<String>,
+    },
+    Local {
+        path: String,
+    },
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -135,7 +163,10 @@ pub struct JobRegistry {
 impl JobRegistry {
     pub fn register(&self, id: &str) -> Arc<CancelToken> {
         let token = CancelToken::new();
-        self.jobs.lock().unwrap().insert(id.to_string(), Arc::clone(&token));
+        self.jobs
+            .lock()
+            .unwrap()
+            .insert(id.to_string(), Arc::clone(&token));
         token
     }
 
@@ -215,7 +246,11 @@ impl Reporter {
         let cancelled = error.code == "cancelled";
         let event = JobEvent {
             job_id: self.job_id.clone(),
-            state: if cancelled { JobState::Cancelled } else { JobState::Failed },
+            state: if cancelled {
+                JobState::Cancelled
+            } else {
+                JobState::Failed
+            },
             stage_label: self.stages.get(self.index).cloned().unwrap_or_default(),
             stage_index: self.index,
             stage_count: self.stages.len(),
@@ -231,14 +266,21 @@ impl Reporter {
 
 /// Build the pipeline description up front — it decides the stage labels the
 /// user sees and the actions recorded on the job.
-fn plan_actions(request: &ExportRequest, clip: Option<ClipRange>) -> (Vec<ActionSpec>, Vec<String>) {
+fn plan_actions(
+    request: &ExportRequest,
+    clip: Option<ClipRange>,
+) -> (Vec<ActionSpec>, Vec<String>) {
     let mut actions = vec![ActionSpec::Analyze];
     let mut stages: Vec<String> = Vec::new();
 
     match &request.input {
         InputSpec::Url { quality, .. } => {
             stages.push("Fetching media…".into());
-            let kind = if request.format.is_audio_only() { "audio" } else { "video" };
+            let kind = if request.format.is_audio_only() {
+                "audio"
+            } else {
+                "video"
+            };
             actions.push(ActionSpec::Download {
                 kind,
                 quality: quality.clone().unwrap_or_else(|| "best".into()),
@@ -252,14 +294,20 @@ fn plan_actions(request: &ExportRequest, clip: Option<ClipRange>) -> (Vec<Action
 
     let aspect = request.aspect.unwrap_or_default();
     if !aspect.is_original() && !request.format.is_audio_only() {
-        actions.push(ActionSpec::Reframe { ratio: aspect.ratio, frame: aspect.frame });
+        actions.push(ActionSpec::Reframe {
+            ratio: aspect.ratio,
+            frame: aspect.frame,
+        });
     }
 
     if request.format.is_animation() {
         // A loop is one pass whether or not it is also trimmed, so the trim
         // does not get a stage of its own the way it does elsewhere.
         if let Some(range) = clip {
-            actions.push(ActionSpec::Trim { start: range.start, end: range.end });
+            actions.push(ActionSpec::Trim {
+                start: range.start,
+                end: range.end,
+            });
         }
         actions.push(ActionSpec::MakeLoop {
             format: request.format,
@@ -267,13 +315,20 @@ fn plan_actions(request: &ExportRequest, clip: Option<ClipRange>) -> (Vec<Action
         });
         stages.push("Building loop…".into());
     } else if let Some(range) = clip {
-        actions.push(ActionSpec::Trim { start: range.start, end: range.end });
+        actions.push(ActionSpec::Trim {
+            start: range.start,
+            end: range.end,
+        });
         stages.push("Clipping…".into());
     } else if request.format.is_audio_only() {
-        actions.push(ActionSpec::ExtractAudio { format: request.format });
+        actions.push(ActionSpec::ExtractAudio {
+            format: request.format,
+        });
         stages.push("Converting…".into());
     } else {
-        actions.push(ActionSpec::Convert { format: request.format });
+        actions.push(ActionSpec::Convert {
+            format: request.format,
+        });
         stages.push("Converting…".into());
     }
 
@@ -335,7 +390,11 @@ fn resolve_destination(
 ) -> Result<PathBuf> {
     match request.destination_path.as_deref() {
         Some(chosen) => validation::normalize_destination(chosen, request.format.ext()),
-        None => Ok(filesystem::unique_path(output_dir, stem, request.format.ext())),
+        None => Ok(filesystem::unique_path(
+            output_dir,
+            stem,
+            request.format.ext(),
+        )),
     }
 }
 
@@ -390,29 +449,47 @@ mod tests {
     fn a_compressed_image_is_marked_in_the_name() {
         let mut r = request("/photos/IMG_7397.HEIC", OutputFormat::Jpg);
         r.compression = Some(Compression::Balanced);
-        assert_eq!(suggested_filename(&r, "IMG_7397.HEIC"), "IMG_7397-compressed.jpg");
+        assert_eq!(
+            suggested_filename(&r, "IMG_7397.HEIC"),
+            "IMG_7397-compressed.jpg"
+        );
     }
 
     #[test]
     fn a_trimmed_local_file_is_marked_in_the_name() {
         let mut r = request("/clips/ScreenRecording.mov", OutputFormat::Mp4);
-        r.clip = Some(ClipSpec { start: "00:02.000".into(), end: "00:05.000".into() });
-        assert_eq!(suggested_filename(&r, "ScreenRecording.mov"), "ScreenRecording-trimmed.mp4");
+        r.clip = Some(ClipSpec {
+            start: "00:02.000".into(),
+            end: "00:05.000".into(),
+        });
+        assert_eq!(
+            suggested_filename(&r, "ScreenRecording.mov"),
+            "ScreenRecording-trimmed.mp4"
+        );
     }
 
     #[test]
     fn a_url_clip_carries_its_range() {
         let r = ExportRequest {
-            input: InputSpec::Url { url: "https://example.com/x".into(), quality: None },
+            input: InputSpec::Url {
+                url: "https://example.com/x".into(),
+                quality: None,
+            },
             format: OutputFormat::Mp3,
-            clip: Some(ClipSpec { start: "02:52.000".into(), end: "02:56.000".into() }),
+            clip: Some(ClipSpec {
+                start: "02:52.000".into(),
+                end: "02:56.000".into(),
+            }),
             output_dir: None,
             compression: None,
             loop_size: None,
             aspect: None,
             destination_path: None,
         };
-        assert_eq!(suggested_filename(&r, "The Sopranos"), "The-Sopranos-02m52s-02m56s.mp3");
+        assert_eq!(
+            suggested_filename(&r, "The Sopranos"),
+            "The-Sopranos-02m52s-02m56s.mp3"
+        );
     }
 }
 
@@ -421,7 +498,14 @@ pub fn run(app: AppHandle, job_id: String, request: ExportRequest, cancel: Arc<C
     let settings = app.state::<SettingsStore>();
 
     let mut reporter: Option<Reporter> = None;
-    let result = execute(&app, &job_id, &request, &cancel, settings.inner(), &mut reporter);
+    let result = execute(
+        &app,
+        &job_id,
+        &request,
+        &cancel,
+        settings.inner(),
+        &mut reporter,
+    );
 
     let registry = app.state::<JobRegistry>();
     registry.finish(&job_id);
@@ -435,14 +519,22 @@ pub fn run(app: AppHandle, job_id: String, request: ExportRequest, cancel: Arc<C
         }
         let event = JobEvent {
             job_id: job_id.clone(),
-            state: if error.code == "cancelled" { JobState::Cancelled } else { JobState::Failed },
+            state: if error.code == "cancelled" {
+                JobState::Cancelled
+            } else {
+                JobState::Failed
+            },
             stage_label: String::new(),
             stage_index: 0,
             stage_count: 1,
             progress: None,
             output_filename: String::new(),
             output: None,
-            error: if error.code == "cancelled" { None } else { Some(error) },
+            error: if error.code == "cancelled" {
+                None
+            } else {
+                Some(error)
+            },
             actions: Vec::new(),
         };
         let _ = app.emit(JOB_EVENT, event);
@@ -473,19 +565,41 @@ fn execute(
     // headed for animated WebP into the image pipeline.
     if let InputSpec::Local { path } = &request.input {
         if image_input(path) {
-            return execute_image(app, job_id, request, cancel, settings, slot, temp, &output_dir);
+            return execute_image(
+                app,
+                job_id,
+                request,
+                cancel,
+                settings,
+                slot,
+                temp,
+                &output_dir,
+            );
         }
     }
+
+    let playback = app
+        .state::<crate::media::playback::PlaybackRegistry>()
+        .cached(&request.input, request.format.is_audio_only());
 
     // ---- Stage 1: understand the source -----------------------------------
     // Clip bounds can only be validated once the real duration is known, so the
     // pipeline is planned after analysis.
     let (source_title, duration, local_input): (String, Option<f64>, Option<PathBuf>) =
         match &request.input {
+            InputSpec::Url { .. } if playback.is_some() => {
+                let asset = playback.as_ref().unwrap();
+                (
+                    asset.title.clone(),
+                    asset.probe.duration,
+                    Some(asset.source.clone()),
+                )
+            }
             InputSpec::Url { url, .. } => {
                 let parsed = validation::validate_url(url)?;
-                let provider = providers::for_url(&parsed)
-                    .ok_or_else(|| ShiftError::new("no_provider", "SHIFT can't handle this link."))?;
+                let provider = providers::for_url(&parsed).ok_or_else(|| {
+                    ShiftError::new("no_provider", "SHIFT can't handle this link.")
+                })?;
                 let cache = temp.sub("meta")?;
                 let media = provider.analyze(&parsed, &cache, cancel)?;
                 (media.title, media.duration, None)
@@ -527,6 +641,7 @@ fn execute(
 
     // ---- Stage 2: get the bytes -------------------------------------------
     let source_path: PathBuf = match (&request.input, local_input) {
+        (InputSpec::Url { .. }, Some(path)) => path,
         (InputSpec::Url { url, quality }, _) => {
             reporter.index = 1;
             reporter.advance(JobState::Downloading);
@@ -563,7 +678,11 @@ fn execute(
     let probe = ffprobe::probe(&source_path, cancel)?;
     // Re-validate against the real downloaded media, not the site's metadata.
     let clip = match &request.clip {
-        Some(spec) => Some(validation::validate_clip(&spec.start, &spec.end, probe.duration)?),
+        Some(spec) => Some(validation::validate_clip(
+            &spec.start,
+            &spec.end,
+            probe.duration,
+        )?),
         None => None,
     };
 
@@ -650,8 +769,10 @@ fn execute_image(
     output_dir: &std::path::Path,
 ) -> Result<()> {
     let InputSpec::Local { path } = &request.input else {
-        return Err(ShiftError::new("no_image_url", "SHIFT can't fetch images from a link yet.")
-            .hint("Drop the image in instead."));
+        return Err(
+            ShiftError::new("no_image_url", "SHIFT can't fetch images from a link yet.")
+                .hint("Drop the image in instead."),
+        );
     };
 
     let resolved = validation::validate_input_path(path)?;
@@ -684,9 +805,14 @@ fn execute_image(
     let mut actions = vec![ActionSpec::Analyze];
     let aspect = request.aspect.unwrap_or_default();
     if !aspect.is_original() {
-        actions.push(ActionSpec::Reframe { ratio: aspect.ratio, frame: aspect.frame });
+        actions.push(ActionSpec::Reframe {
+            ratio: aspect.ratio,
+            frame: aspect.frame,
+        });
     }
-    actions.push(ActionSpec::ConvertImage { format: request.format });
+    actions.push(ActionSpec::ConvertImage {
+        format: request.format,
+    });
     if plan.steps.len() > 1 {
         actions.push(ActionSpec::CompressImage { level: compression });
     }
@@ -725,9 +851,11 @@ fn execute_image(
         };
         let out = crate::process::run_capture(binary, args, cancel)?;
         if !out.success {
-            return Err(ShiftError::new("image_failed", "SHIFT couldn't convert this image.")
-                .hint("The file may be damaged or in an unexpected format.")
-                .technical(out.log()));
+            return Err(
+                ShiftError::new("image_failed", "SHIFT couldn't convert this image.")
+                    .hint("The file may be damaged or in an unexpected format.")
+                    .technical(out.log()),
+            );
         }
     }
 

@@ -18,8 +18,13 @@ const PROGRESS_TEMPLATE: &str =
     "download:@SHIFT %(progress.downloaded_bytes)s %(progress.total_bytes)s %(progress.total_bytes_estimate)s";
 
 /// Heights offered when the source actually carries them.
-const LADDER: [(u32, &str); 5] =
-    [(2160, "2160p"), (1440, "1440p"), (1080, "1080p"), (720, "720p"), (480, "480p")];
+const LADDER: [(u32, &str); 5] = [
+    (2160, "2160p"),
+    (1440, "1440p"),
+    (1080, "1080p"),
+    (720, "720p"),
+    (480, "480p"),
+];
 
 pub struct YtDlpProvider;
 
@@ -32,6 +37,8 @@ impl YtDlpProvider {
 #[derive(Deserialize)]
 struct RawInfo {
     title: Option<String>,
+    width: Option<u32>,
+    height: Option<u32>,
     duration: Option<f64>,
     thumbnail: Option<String>,
     webpage_url: Option<String>,
@@ -43,6 +50,7 @@ struct RawInfo {
 
 #[derive(Deserialize)]
 struct RawFormat {
+    width: Option<u32>,
     height: Option<u32>,
     vcodec: Option<String>,
 }
@@ -80,7 +88,11 @@ impl UrlProvider for YtDlpProvider {
                 .hint("Paste a link to a single video or track."));
         }
 
-        let domain = url.host_str().unwrap_or("").trim_start_matches("www.").to_string();
+        let domain = url
+            .host_str()
+            .unwrap_or("")
+            .trim_start_matches("www.")
+            .to_string();
         let title = info
             .title
             .filter(|t| !t.trim().is_empty())
@@ -90,20 +102,26 @@ impl UrlProvider for YtDlpProvider {
         // Treat a source as video unless every format positively says otherwise.
         // The generic extractor reports neither height nor vcodec, and guessing
         // "audio" there would hide MP4 from the user on an ordinary video file.
-        let known_video = formats
-            .iter()
-            .any(|f| f.height.unwrap_or(0) > 0 || matches!(f.vcodec.as_deref(), Some(v) if v != "none"));
+        let known_video = formats.iter().any(|f| {
+            f.height.unwrap_or(0) > 0 || matches!(f.vcodec.as_deref(), Some(v) if v != "none")
+        });
         let all_audio_only =
             !formats.is_empty() && formats.iter().all(|f| f.vcodec.as_deref() == Some("none"));
         let has_video = known_video || !all_audio_only;
         let max_height = formats.iter().filter_map(|f| f.height).max().unwrap_or(0);
 
-        let mut qualities = vec![QualityOption { id: "best".into(), label: "Best".into() }];
+        let mut qualities = vec![QualityOption {
+            id: "best".into(),
+            label: "Best".into(),
+        }];
         for (h, label) in LADDER {
             // Only offer a rung the source can actually satisfy, and never one
             // that equals "Best" — that would be two chips for one outcome.
             if max_height > h && formats.iter().any(|f| f.height.unwrap_or(0) >= h) {
-                qualities.push(QualityOption { id: h.to_string(), label: label.into() });
+                qualities.push(QualityOption {
+                    id: h.to_string(),
+                    label: label.into(),
+                });
             }
         }
         qualities.truncate(4);
@@ -113,6 +131,19 @@ impl UrlProvider for YtDlpProvider {
             .as_deref()
             .and_then(|_| fetch_thumbnail(&raw_json, cache_dir, cancel).ok().flatten())
             .map(|p| p.to_string_lossy().to_string());
+
+        // Top-level width/height when the extractor gives them, otherwise the
+        // largest format that reports both. Either is the real frame size, not
+        // a guess from the thumbnail.
+        let source_size = match (info.width, info.height) {
+            (Some(w), Some(h)) if w > 0 && h > 0 => (Some(w), Some(h)),
+            _ => formats
+                .iter()
+                .filter(|f| f.width.unwrap_or(0) > 0 && f.height.unwrap_or(0) > 0)
+                .max_by_key(|f| f.height.unwrap_or(0))
+                .map(|f| (f.width, f.height))
+                .unwrap_or((None, None)),
+        };
 
         Ok(UrlMedia {
             provider: self.id().to_string(),
@@ -127,6 +158,11 @@ impl UrlProvider for YtDlpProvider {
             thumbnail_path,
             qualities,
             has_video,
+            // The shape of the best video the site offers. Enough for the
+            // aspect controls to report real dimensions before anything is
+            // downloaded; the picture beside them is still only a thumbnail.
+            width: source_size.0,
+            height: source_size.1,
         })
     }
 
@@ -145,6 +181,15 @@ impl UrlProvider for YtDlpProvider {
                 Ok(h) => format!("bv*[height<={h}]+ba/b[height<={h}]/bv*+ba/b"),
                 Err(_) => "bv*+ba/b".to_string(),
             },
+            // A small progressive MP4 reaches WebKit much sooner than the
+            // best separate HLS video+audio pair. The fallbacks retain broad
+            // provider support and the playback layer proxies only if probe
+            // shows that WebKit cannot decode what was returned.
+            DownloadKind::PreviewVideo => {
+                "b[ext=mp4][protocol=https][height<=540]/b[ext=mp4][height<=540]/b[height<=540]/b"
+                    .to_string()
+            }
+            DownloadKind::PreviewAudio => "ba[ext=m4a]/ba[ext=mp4]/ba/b".to_string(),
         };
 
         let mut args: Vec<String> = vec![
@@ -159,15 +204,27 @@ impl UrlProvider for YtDlpProvider {
             "20".into(),
             "--retries".into(),
             "3".into(),
+            "--concurrent-fragments".into(),
+            "4".into(),
             "-f".into(),
             selector,
             "-o".into(),
-            dest_dir.join("source.%(ext)s").to_string_lossy().to_string(),
+            dest_dir
+                .join("source.%(ext)s")
+                .to_string_lossy()
+                .to_string(),
         ];
-        if kind == DownloadKind::Video {
+        if matches!(kind, DownloadKind::Video | DownloadKind::PreviewVideo) {
             // Give the muxer a container that always accepts the merged streams.
             args.push("--merge-output-format".into());
-            args.push("mkv".into());
+            args.push(
+                if kind == DownloadKind::PreviewVideo {
+                    "mp4"
+                } else {
+                    "mkv"
+                }
+                .into(),
+            );
         }
         // Point yt-dlp at the same FFmpeg SHIFT ships, never at whatever is on PATH.
         if let Ok(ffmpeg) = resolve(Binary::Ffmpeg) {
@@ -189,8 +246,9 @@ impl UrlProvider for YtDlpProvider {
             return Err(ShiftError::download_failed(out.log()));
         }
 
-        find_downloaded(dest_dir)
-            .ok_or_else(|| ShiftError::download_failed("yt-dlp reported success but produced no file"))
+        find_downloaded(dest_dir).ok_or_else(|| {
+            ShiftError::download_failed("yt-dlp reported success but produced no file")
+        })
     }
 }
 
@@ -200,7 +258,11 @@ impl UrlProvider for YtDlpProvider {
 /// Reuses the metadata already extracted via `--load-info-json` instead of
 /// asking yt-dlp to visit the site a second time. On a real extractor that is
 /// the difference between roughly forty seconds of "Reading…" and a handful.
-fn fetch_thumbnail(raw_info: &str, cache_dir: &Path, cancel: &CancelToken) -> Result<Option<PathBuf>> {
+fn fetch_thumbnail(
+    raw_info: &str,
+    cache_dir: &Path,
+    cancel: &CancelToken,
+) -> Result<Option<PathBuf>> {
     std::fs::create_dir_all(cache_dir).ok();
     let info_path = cache_dir.join("info.json");
     if std::fs::write(&info_path, raw_info).is_err() {

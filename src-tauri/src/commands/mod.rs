@@ -6,8 +6,9 @@
 use crate::errors::{Result, ShiftError};
 use crate::filesystem;
 use crate::jobs::{self, ExportRequest, JobRegistry};
-use crate::media::aspect::{self, AspectSpec};
+use crate::media::aspect::{self, AspectSpec, ContentBox, FrameMode};
 use crate::media::image;
+use crate::media::preview;
 use crate::media::profiles::LoopSize;
 use crate::media::{ffprobe::probe, profiles};
 use crate::process::CancelToken;
@@ -15,7 +16,8 @@ use crate::providers::{self, UrlMedia};
 use crate::settings::SettingsStore;
 use crate::validation;
 use serde::Serialize;
-use tauri::{AppHandle, Manager, State};
+use std::time::Instant;
+use tauri::{AppHandle, Emitter, Manager, State};
 
 /// Local file extensions accepted (LOC-01).
 ///
@@ -24,8 +26,9 @@ use tauri::{AppHandle, Manager, State};
 /// `profiles::options_for`, never by its extension. Refusing to read a MKV that
 /// FFmpeg handles perfectly would be an artificial limit.
 const VIDEO_EXTS: [&str; 6] = ["mp4", "mov", "webm", "mkv", "m4v", "avi"];
-const AUDIO_EXTS: [&str; 9] =
-    ["mp3", "wav", "m4a", "aac", "flac", "aiff", "aif", "ogg", "opus"];
+const AUDIO_EXTS: [&str; 9] = [
+    "mp3", "wav", "m4a", "aac", "flac", "aiff", "aif", "ogg", "opus",
+];
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -59,10 +62,16 @@ pub async fn analyze_url(url: String) -> Result<UrlMedia> {
             .join("thumbs")
             .join(uuid::Uuid::new_v4().to_string());
         let cancel = CancelToken::new();
-        provider.analyze(&parsed, &cache, &cancel)
+        let result = provider.analyze(&parsed, &cache, &cancel);
+        if result.is_err() {
+            let _ = std::fs::remove_dir_all(&cache);
+        }
+        result
     })
     .await
-    .map_err(|e| ShiftError::new("internal", "SHIFT couldn't complete that.").technical(e.to_string()))?
+    .map_err(|e| {
+        ShiftError::new("internal", "SHIFT couldn't complete that.").technical(e.to_string())
+    })?
 }
 
 #[tauri::command]
@@ -108,19 +117,27 @@ pub async fn analyze_file(path: String) -> Result<LocalMedia> {
         Ok(LocalMedia {
             kind: if info.has_video() { "video" } else { "audio" },
             path: resolved.to_string_lossy().to_string(),
-            name: resolved.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
+            name: resolved
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default(),
             ext: ext.to_uppercase(),
             size_bytes: info.size_bytes,
             duration: info.duration,
             width: info.video.as_ref().and_then(|v| v.width),
             height: info.video.as_ref().and_then(|v| v.height),
             has_video: info.has_video(),
-            outputs: profiles::options_for(&info).iter().map(|f| f.label().to_string()).collect(),
+            outputs: profiles::options_for(&info)
+                .iter()
+                .map(|f| f.label().to_string())
+                .collect(),
             has_alpha: false,
         })
     })
     .await
-    .map_err(|e| ShiftError::new("internal", "SHIFT couldn't read that file.").technical(e.to_string()))?
+    .map_err(|e| {
+        ShiftError::new("internal", "SHIFT couldn't read that file.").technical(e.to_string())
+    })?
 }
 
 /// What an aspect choice would actually produce.
@@ -136,6 +153,10 @@ pub struct AspectPreview {
     pub height: u32,
     /// True when the request enlarges the source, which only Freeform can do.
     pub upscales: bool,
+    /// Where the picture sits inside the frame. The UI lays out its preview
+    /// from exactly these numbers, which are the ones the encoder is given.
+    pub content: ContentBox,
+    pub mode: FrameMode,
 }
 
 /// `None` when there is nothing to show: Original, an unknown source size (a
@@ -169,7 +190,40 @@ pub fn aspect_preview(
         None => reframe,
     };
     let (width, height) = framed.final_size();
-    Some(AspectPreview { width, height, upscales: reframe.upscales })
+    Some(AspectPreview {
+        width,
+        height,
+        upscales: reframe.upscales,
+        content: framed.content_box(),
+        mode: framed.mode,
+    })
+}
+
+/// A small, disposable image the UI can draw a framing preview with.
+///
+/// Returns a path the webview can load. The file is cached per source and per
+/// whole second of `at`, so cycling through ratios never re-extracts anything —
+/// only a new source, or a moved IN point, costs work. It is deliberately low
+/// resolution and is never an input to an export.
+#[tauri::command]
+pub async fn preview_source(app: AppHandle, path: String, at: Option<f64>) -> Result<String> {
+    // The app cache directory, not the system temp root: see `preview::cache_dir`
+    // for why the asset protocol cannot serve the latter on macOS.
+    let root = app.path().app_cache_dir().map_err(|e| {
+        ShiftError::new("preview_cache", "SHIFT couldn't prepare a preview.")
+            .technical(e.to_string())
+    })?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let resolved = validation::validate_input_path(&path)?;
+        let cancel = CancelToken::new();
+        let out = preview::derive(&resolved, at, &root, &cancel)?;
+        // Inlined rather than served: see `preview::base64`.
+        preview::data_uri(&out)
+    })
+    .await
+    .map_err(|e| {
+        ShiftError::new("internal", "SHIFT couldn't build a preview.").technical(e.to_string())
+    })?
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -278,4 +332,84 @@ pub fn health(app: AppHandle) -> Health {
 /// Cancel everything still running when the window goes away.
 pub fn shutdown(app: &AppHandle) {
     app.state::<JobRegistry>().cancel_all();
+    app.state::<crate::media::playback::PlaybackRegistry>()
+        .clear();
+    let _ = std::fs::remove_dir_all(std::env::temp_dir().join("SHIFT").join("thumbs"));
+}
+
+#[tauri::command]
+pub fn create_playback(
+    app: AppHandle,
+    input: jobs::InputSpec,
+    known_media: Option<UrlMedia>,
+) -> String {
+    app.state::<crate::media::playback::PlaybackRegistry>()
+        .create_known(input, known_media)
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PlaybackEvent {
+    playback_id: String,
+    stage: crate::media::playback::PlaybackStage,
+    elapsed_ms: u64,
+    detail: Option<String>,
+}
+
+#[tauri::command]
+pub async fn prepare_playback(
+    app: AppHandle,
+    id: String,
+    force_proxy: bool,
+) -> Result<crate::media::playback::PlaybackInfo> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let started = Instant::now();
+        let event_app = app.clone();
+        let event_id = id.clone();
+        let mut on_stage = move |stage, detail| {
+            let elapsed_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+            let _ = event_app.emit(
+                "shift://playback",
+                PlaybackEvent {
+                    playback_id: event_id.clone(),
+                    stage,
+                    elapsed_ms,
+                    detail,
+                },
+            );
+        };
+        let asset = app
+            .state::<crate::media::playback::PlaybackRegistry>()
+            .prepare_traced(&id, force_proxy, None, &mut on_stage)?;
+        app.asset_protocol_scope()
+            .allow_file(&asset.playable)
+            .map_err(|e| {
+                ShiftError::new("preview_scope", "SHIFT couldn't open the preview.")
+                    .technical(e.to_string())
+            })?;
+        Ok(asset.info())
+    })
+    .await
+    .map_err(|e| {
+        ShiftError::new("preview_failed", "SHIFT couldn't prepare playback.")
+            .technical(e.to_string())
+    })?
+}
+#[tauri::command]
+pub fn release_playback(app: AppHandle, id: String) {
+    app.state::<crate::media::playback::PlaybackRegistry>()
+        .release(&id);
+}
+
+#[tauri::command]
+pub fn release_url_media(thumbnail_path: Option<String>) {
+    let Some(path) = thumbnail_path.map(std::path::PathBuf::from) else {
+        return;
+    };
+    let root = std::env::temp_dir().join("SHIFT").join("thumbs");
+    if path.starts_with(&root) {
+        if let Some(parent) = path.parent().filter(|parent| parent.starts_with(&root)) {
+            let _ = std::fs::remove_dir_all(parent);
+        }
+    }
 }

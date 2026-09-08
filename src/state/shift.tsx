@@ -1,3 +1,4 @@
+import { usePlayback } from "./playback";
 /**
  * The single source of truth for what the window is showing.
  *
@@ -16,8 +17,9 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import * as ipc from "@/lib/ipc";
-import { formatTimestamp } from "@/lib/format";
+import { formatTimestamp, parseTimestamp } from "@/lib/format";
 import {
   compressionOptions,
   ASPECT_DEFAULT,
@@ -83,6 +85,10 @@ interface ShiftState {
   loopSize: LoopSize;
   aspect: AspectSpec;
   aspectPreview: AspectPreview | null;
+  /** The cached preview image for the current source, inlined, if any. */
+  previewSource: string | null;
+  /** Why a preview could not be built, so the box explains itself. */
+  previewError: string | null;
   job: Job | null;
   output: JobOutput | null;
   error: ShiftError | null;
@@ -93,6 +99,7 @@ interface ShiftState {
 }
 
 interface ShiftApi extends ShiftState {
+  playback: ReturnType<typeof usePlayback>;
   outputs: OutputFormat[];
   showQuality: boolean;
   duration: number | null;
@@ -116,6 +123,11 @@ interface ShiftApi extends ShiftState {
   aspectPreview: AspectPreview | null;
   /** Fit will pad with transparency rather than black. */
   padsTransparent: boolean;
+  /** The image the preview draws, already converted for the webview. */
+  previewImage: string | null;
+  /** True while the preview picture stands in for real frames (URL sources). */
+  previewIsApproximate: boolean;
+  previewError: string | null;
   /** The custom size entered would enlarge the source. */
   aspectUpscales: boolean;
   setAspectRatio: (r: AspectRatio) => void;
@@ -160,6 +172,8 @@ const initial: ShiftState = {
   loopSize: "standard",
   aspect: ASPECT_DEFAULT,
   aspectPreview: null,
+  previewSource: null,
+  previewError: null,
   job: null,
   output: null,
   error: null,
@@ -265,6 +279,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
             clipLabel: null,
             clipSeconds: null,
             aspect: ASPECT_DEFAULT,
+            previewSource: null,
             output: null,
             error: null,
           }));
@@ -298,6 +313,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
             clipLabel: null,
             clipSeconds: null,
             aspect: ASPECT_DEFAULT,
+            previewSource: null,
             output: null,
             error: null,
           }));
@@ -341,7 +357,15 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
     return s.localMedia?.outputs ?? [];
   }, [s.screen, s.localMedia]);
 
-  const duration = s.urlMedia?.duration ?? s.localMedia?.duration ?? null;
+  const playbackInput = s.urlMedia
+    ? { kind: "url" as const, url: s.urlMedia.url, quality: s.quality }
+    : s.localMedia && s.localMedia.kind !== "image"
+      ? { kind: "local" as const, path: s.localMedia.path }
+      : null;
+  // Remote preparation begins as soon as URL detection succeeds. Local media
+  // remains lazy because it is already immediately available from disk.
+  const playback = usePlayback(playbackInput, !!s.urlMedia || s.clipEnabled, s.urlMedia);
+  const duration = playback.info?.duration ?? s.urlMedia?.duration ?? s.localMedia?.duration ?? null;
 
   // Source-quality selection is real for a remote video, where yt-dlp actually
   // has separate renditions to choose between. A local file has exactly one,
@@ -366,6 +390,15 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
   // A still headed for a format with an alpha channel is padded with nothing
   // instead of black, so the words describing Fit have to follow the format.
   const padsTransparent = isImage && keepsAlpha(s.format);
+
+  // A local source gets a real frame; a URL has only the poster the site gave
+  // us, which stands in until the media itself exists.
+  // A local source arrives already inlined; a URL has only the poster the site
+  // gave us, which still goes through the asset protocol.
+  const previewImage =
+    s.previewSource ??
+    (s.urlMedia?.thumbnailPath ? convertFileSrc(s.urlMedia.thumbnailPath) : null);
+  const previewIsApproximate = !s.previewSource && !!s.urlMedia?.thumbnailPath;
   // A custom size has to be a real size before Export means anything. The
   // native layer refuses the same values; this only stops the user reaching the
   // Save panel first.
@@ -390,8 +423,8 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
   // Pure arithmetic in the native layer: no process is spawned, so this is
   // cheap enough to run on every keystroke and keeps one implementation of the
   // geometry rather than a second one over here that could drift.
-  const sourceW = s.localMedia?.width ?? null;
-  const sourceH = s.localMedia?.height ?? null;
+  const sourceW = playback.info?.width ?? s.localMedia?.width ?? s.urlMedia?.width ?? null;
+  const sourceH = playback.info?.height ?? s.localMedia?.height ?? s.urlMedia?.height ?? null;
   useEffect(() => {
     if (!sourceW || !sourceH || s.aspect.ratio === "original") {
       patch({ aspectPreview: null });
@@ -409,6 +442,42 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
     };
   }, [sourceW, sourceH, s.aspect, isLoop, s.loopSize, patch]);
 
+  // ---- preview material ---------------------------------------------------
+  // One cheap image per source, cached in the native layer. Cycling through
+  // ratios never touches this effect: it depends on the file and, for moving
+  // media, on the IN point — not on the aspect at all.
+  const previewAt = useMemo(() => {
+    if (!s.localMedia || s.localMedia.kind === "image") return null;
+    const inPoint = s.clipEnabled ? parseTimestamp(s.clipIn) : null;
+    // Whole seconds only, so scrubbing does not re-extract.
+    const at = inPoint ?? (s.localMedia.duration ? s.localMedia.duration / 2 : null);
+    return at == null ? null : Math.floor(at);
+  }, [s.localMedia, s.clipEnabled, s.clipIn]);
+
+  const localPath = !s.clipEnabled && (s.localMedia?.hasVideo || s.localMedia?.kind === "image") ? s.localMedia.path : null;
+  useEffect(() => {
+    if (!localPath) {
+      patch({ previewSource: null, previewError: null });
+      return;
+    }
+    let live = true;
+    ipc
+      .previewSource(localPath, previewAt)
+      .then((uri) => live && patch({ previewSource: uri, previewError: null }))
+      // A preview is a convenience: a failure explains itself inside the box
+      // and never takes over the screen the way an export failure does.
+      .catch(
+        (e) =>
+          live &&
+          patch({ previewSource: null, previewError: ipc.toShiftError(e).message }),
+      );
+    return () => {
+      live = false;
+    };
+  }, [localPath, previewAt, patch]);
+
+  const [validatedClip, setValidatedClip] = useState<string | null>(null);
+  const clipKey = JSON.stringify([s.clipIn, s.clipOut, duration]);
   // ---- clip ---------------------------------------------------------------
   useEffect(() => {
     if (!s.clipEnabled) {
@@ -420,7 +489,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
       .validateClip(s.clipIn, s.clipOut, duration)
       .then(
         (check) =>
-          live && patch({ clipError: null, clipLabel: check.label, clipSeconds: check.seconds }),
+          live && (setValidatedClip(clipKey), patch({ clipError: null, clipLabel: check.label, clipSeconds: check.seconds })),
       )
       .catch(
         (e) =>
@@ -439,7 +508,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
   const canExport =
     !s.analyzing &&
     (s.screen === "url" || s.screen === "local") &&
-    (!s.clipEnabled || !s.clipError) &&
+    (!s.clipEnabled || (!s.clipError && validatedClip === clipKey)) &&
     !loopTooLong &&
     !aspectInvalid;
 
@@ -507,6 +576,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
   }, [s.job]);
 
   const reset = useCallback(() => {
+    void ipc.releaseUrlMedia(s.urlMedia?.thumbnailPath ?? null);
     jobRef.current = null;
     lastInput.current = null;
     set((prev) => ({
@@ -515,7 +585,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
       health: prev.health,
       healthError: prev.healthError,
     }));
-  }, []);
+  }, [s.urlMedia?.thumbnailPath]);
 
   const retry = useCallback(() => {
     const last = lastInput.current;
@@ -534,6 +604,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
     showQuality,
     duration,
     canExport,
+    playback,
     saving,
     extractAudio,
     isImage,
@@ -546,6 +617,9 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
     aspectPreview: s.aspectPreview,
     aspectUpscales,
     padsTransparent,
+    previewImage,
+    previewIsApproximate,
+    previewError: s.previewError,
     aspectLocked,
     compressionChoices,
     submitUrl,

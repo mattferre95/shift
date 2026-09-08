@@ -110,6 +110,27 @@ export interface AspectPreview {
   width: number;
   height: number;
   upscales: boolean;
+  /** Where the picture sits inside the frame — the numbers the encoder gets. */
+  content: ContentBox;
+  mode: FrameMode;
+}
+
+/**
+ * Mirrors `aspect::ContentBox`. One shape for both modes: the source, at the
+ * size it meets the canvas, offset from the canvas's top-left. Fit offsets are
+ * positive and the gap is padding; Fill offsets are negative and the overflow
+ * is cropped away.
+ *
+ * Given in canvas pixels. The UI only ever uses ratios of these, which any
+ * later resize leaves untouched.
+ */
+export interface ContentBox {
+  canvasWidth: number;
+  canvasHeight: number;
+  frameWidth: number;
+  frameHeight: number;
+  offsetX: number;
+  offsetY: number;
 }
 
 /** Mirrors `media::image::Compression`. */
@@ -155,6 +176,9 @@ export interface UrlMedia {
   thumbnailPath: string | null;
   qualities: QualityOption[];
   hasVideo: boolean;
+  /** Source frame size when the provider reports it. */
+  width: number | null;
+  height: number | null;
 }
 
 export type MediaKind = "video" | "audio" | "image";

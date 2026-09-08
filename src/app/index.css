@@ -139,3 +139,23 @@ input, textarea { user-select: text; }
   outline-offset: 2px;
   border-radius: 6px;
 }
+
+/* Transparency indicator for the framing preview. Shows where an export will
+   genuinely have no pixels; never written into a file. */
+.shift-alpha {
+  --alpha-a: oklch(0.24 0.004 165);
+  --alpha-b: oklch(0.19 0.004 165);
+  background-color: var(--alpha-b);
+  background-image:
+    linear-gradient(45deg, var(--alpha-a) 25%, transparent 25%, transparent 75%, var(--alpha-a) 75%),
+    linear-gradient(45deg, var(--alpha-a) 25%, transparent 25%, transparent 75%, var(--alpha-a) 75%);
+  background-size: 12px 12px;
+  background-position: 0 0, 6px 6px;
+}
+
+.trim-seek { appearance: none; background: transparent; cursor: pointer; }
+.trim-seek::-webkit-slider-runnable-track { height: 8px; background: transparent; }
+.trim-seek::-webkit-slider-thumb { appearance: none; width: 3px; height: 22px; margin-top: -7px; background: var(--color-shift-text); border-radius: 2px; }
+.trim-bound { appearance: none; background: transparent; pointer-events: none; }
+.trim-bound::-webkit-slider-runnable-track { height: 8px; background: transparent; }
+.trim-bound::-webkit-slider-thumb { appearance: none; pointer-events: auto; cursor: ew-resize; width: 9px; height: 20px; margin-top: -6px; border-radius: 3px; background: var(--color-shift-emerald); }

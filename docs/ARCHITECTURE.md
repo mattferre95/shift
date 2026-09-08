@@ -29,6 +29,7 @@ or a shell string. Ten commands make up the entire IPC surface
 | `providers` | URL sources behind `UrlProvider`. yt-dlp is the first implementation, not the interface. |
 | `media::ffprobe` | The single source of truth about a file's streams. |
 | `media::aspect` | Shape: ratios, Fill/Fit, freeform sizes, and the filter chain each implies. The only place that arithmetic happens. |
+| `media::preview` | Small cached derivatives the interface draws framing previews with. Never an export input. |
 | `media::profiles` | Every codec and container decision, including the loop presets. Nothing else builds FFmpeg arguments. |
 | `media::ffmpeg` | Running a plan and normalizing its progress. |
 | `jobs` | The state machine, the registry, and the pipeline runner. |
@@ -174,6 +175,30 @@ aspect ratio to preserve the display aspect it believes it is changing, which
 leaves a reframed video with non-square pixels a player then stretches back —
 a quarter of a percent, but a stretch. Every scale is followed by `setsar=1`.
 
+**The preview is the export's own geometry, drawn.** `Reframe::content_box`
+returns one shape for both modes — the source, at the size it meets the canvas,
+offset from the canvas's corner — and that single computation produces both the
+`crop`/`pad` offsets FFmpeg is given and the CSS the preview is laid out with.
+The offsets are written into the filter string as concrete numbers rather than
+`(in_w-out_w)/2` precisely so the two cannot drift: FFmpeg evaluates that
+expression in floating point and rounds it its own way, which can land a pixel
+from where the preview draws. A test asserts the filter string equals the
+content box for every ratio, mode and source shape.
+
+The same shape is what a draggable crop would move later: dragging changes
+`offset`, and neither the filters nor the preview need to learn anything new.
+
+**A preview never encodes.** `media::preview` makes one ~50 KB derivative per
+source — `sips` for a still, a single seeked frame for video — cached by path,
+size, mtime and whole second. Cycling 16:9 → 9:16 → 1:1 re-uses it every time;
+only a new source or a moved IN point costs work, and no palette is ever built
+merely to look at framing.
+
+**The derivative is inlined, not served.** Handing the webview a file means
+getting a scope glob, a canonicalised path and a CSP entry to agree, and a
+mismatch fails silently as a blank image. A `data:` URI has none of those moving
+parts, and at this size costs nothing.
+
 **The dimensions on screen come from the same code as the export.**
 `aspect_preview` is a command rather than a second implementation in TypeScript,
 and it takes the loop preset too: a 9:16 crop of a 1280x720 clip is 404x720 as a
@@ -244,3 +269,44 @@ already covers lossy delivery), and AV1 video output (encode times do not suit
 an interactive app).
 Also worth revisiting: provider-assisted section downloads, and a second
 `UrlProvider` to prove the abstraction.
+
+## Playable trim preview
+
+`media::playback::PlaybackRegistry` owns each input session. Focused commands
+create, prepare, and release it. Preparation runs on a worker with the existing
+process-group cancellation token. URL preparation starts as soon as detection
+finishes and reuses the detected metadata instead of resolving the provider a
+second time. Output, quality, aspect, and range changes keep the same preview.
+
+For video, `UrlProvider` prefers a progressive MP4 no larger than 540p; for
+audio it prefers a directly playable audio stream. The downloaded preview can
+feed export only when its measured dimensions satisfy the requested export
+quality. Otherwise export downloads the requested final source independently.
+An `Arc` lease protects a reusable source from reset while export is running.
+
+A conservative MP3, PCM WAV, AAC M4A, and H.264/AAC MP4/MOV shortlist is served
+directly through an explicitly allowed asset-protocol path. Other sources get
+an AAC M4A or modest H.264/AAC MP4 preview, with one proxy fallback if direct
+playback fails. Preview encoding is defined in `profiles::playback_plan` and
+never depends on IN, OUT, output format, or aspect. A proxy never feeds export.
+WebKit compatibility references: [Apple's Safari video guidance](https://developer.apple.com/documentation/webkit/delivering-video-content-for-safari)
+and [Apple's media format table](https://developer.apple.com/library/archive/documentation/AppleApplications/Reference/SafariWebContent/CreatingContentforSafarioniPhone/CreatingContentforSafarioniPhone.html).
+
+The player uses the existing IN/OUT strings as its sole range state and backend
+validation gates Export against the exact current range. Seeking changes only
+the playhead. Selection playback seeks to IN and pauses at OUT, checked on
+animation frames and media time updates; this has display-frame granularity,
+not sample-accurate audio scheduling. Export remains FFmpeg-accurate. Video
+framing draws the existing backend `ContentBox`, with no second crop algorithm.
+A waveform is deferred; the timeline contains only real bounds and playhead.
+
+Playback directories are scoped `TempDir`s: release, reset, failure, and shutdown
+cancel work and drop files when the final lease ends. URL thumbnail directories
+are released on reset and shutdown. Crash leftovers use the existing stale-directory
+pruning. The older still-image framing cache remains separate. Backend events
+drive the indeterminate `Resolving link`, `Downloading preview`, `Preparing player`,
+and `Ready` states; the interface never fabricates a percentage.
+
+Targeted checks: `npm test`, `cargo test --test audio_trim`, and
+`cargo test --test playback`. Existing network checks remain opt-in under
+`url_pipeline`; they must not be added to ordinary offline runs.

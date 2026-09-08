@@ -1,9 +1,10 @@
+import { TrimPlayer } from "./TrimPlayer";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { Chip } from "@/components/Chip";
-import { TimeField } from "@/components/TimeField";
 import { Toggle } from "@/components/Toggle";
-import { formatBytes, formatDuration, parseTimestamp, resolutionLabel } from "@/lib/format";
+import { formatBytes, formatDuration, resolutionLabel } from "@/lib/format";
 import { useShift } from "@/state/shift";
+import { Preview } from "@/features/input/Preview";
 import { SizeField } from "@/components/SizeField";
 import {
   ASPECT_ROWS,
@@ -31,7 +32,7 @@ export function DetectedState() {
       {/* Everything above Export is centred in the room it has, with a small
           upward bias — true centring reads as slightly low. Export itself stays
           pinned to the bottom. */}
-      <div className="flex min-h-0 flex-1 flex-col justify-center pb-[18px]">
+      <div className="flex min-h-0 flex-1 flex-col justify-center" style={{ paddingBottom: s.clipEnabled && !s.isImage ? (isUrl ? 100 : 72) : 18 }}>
         {/* ---- identity -------------------------------------------------- */}
       <div className="flex items-start gap-[14px]">
         {isUrl ? <Thumbnail /> : <FileBadge ext={local?.ext ?? ""} />}
@@ -64,6 +65,7 @@ export function DetectedState() {
                 .join("  ·  ")
             )}
           </div>
+          {isUrl && <UrlPreviewStatus />}
         </div>
 
         <button
@@ -80,7 +82,17 @@ export function DetectedState() {
       <div className="my-[18px] h-px bg-[var(--hairline-faint)]" />
 
       {/* ---- actions ------------------------------------------------------ */}
-      <div className="flex flex-col gap-[18px] overflow-y-auto">
+      {s.clipEnabled && !s.isImage ? (
+        <div className="grid min-h-0 grid-cols-[340px_minmax(0,1fr)] items-start gap-6">
+          <div className="flex flex-col gap-4">
+            <Section title="OUTPUT"><OutputChips /></Section>
+            {s.isLoop && <LoopSection compact />}
+            {s.showAspect && <><AspectRatios compact />{s.aspect.ratio !== "original" && <FrameControls />}</>}
+            <Modifiers />
+          </div>
+          <TrimPlayer key={s.localMedia?.path ?? s.urlMedia?.url} />
+        </div>
+      ) : <div className="flex flex-col gap-[18px] overflow-y-auto">
         <Section title="OUTPUT">
           <OutputChips />
         </Section>
@@ -93,7 +105,7 @@ export function DetectedState() {
             rather than running off the bottom. Audio, which has no shape, keeps
             the plain single column. */}
         {s.showAspect ? (
-          <div className="flex items-start gap-[28px]">
+          <div className="flex items-start gap-[24px]">
             <div className="w-[228px] shrink-0">
               <AspectRatios />
             </div>
@@ -101,15 +113,27 @@ export function DetectedState() {
               {s.aspect.ratio !== "original" && <FrameControls />}
               <Modifiers />
             </div>
+            {/* The preview earns a column rather than a row: the window is wide
+                and short, and stacking it would push Export off the bottom in
+                the deepest state. It only exists once there is a reframe to
+                show, so Original is untouched. */}
+            {s.aspectPreview && (
+              <div className="shrink-0">
+                <Preview />
+              </div>
+            )}
           </div>
         ) : (
           <Modifiers />
         )}
-      </div>
+      </div>}
       </div>
 
       {/* ---- export ------------------------------------------------------- */}
-      <div className="mt-[18px] flex items-center justify-between gap-4">
+      <div
+        className={s.clipEnabled && !s.isImage ? "absolute left-8 right-8 flex items-center justify-between gap-4" : "mt-[18px] flex shrink-0 items-center justify-between gap-4"}
+        style={s.clipEnabled && !s.isImage ? { bottom: isUrl ? 50 : 28 } : undefined}
+      >
         <div />
 
         <button
@@ -130,7 +154,7 @@ export function DetectedState() {
       </div>
 
       {isUrl && (
-        <div className="mt-[10px] text-[11px] leading-relaxed text-shift-ghost">
+        <div className={s.clipEnabled ? "absolute bottom-5 left-8 right-8 text-[11px] leading-relaxed text-shift-ghost" : "mt-[10px] text-[11px] leading-relaxed text-shift-ghost"}>
           Only download media you are authorized or legally permitted to download.
         </div>
       )}
@@ -157,7 +181,7 @@ function OutputChips() {
     <Chip key={f} label={f} selected={s.format === f} onClick={() => s.setFormat(f)} />
   );
 
-  if (!s.sourceMoves) {
+  if (!s.sourceMoves || s.clipEnabled) {
     return <div className="flex flex-wrap gap-2">{s.outputs.map(chip)}</div>;
   }
 
@@ -224,7 +248,7 @@ function Modifiers() {
             <div className="text-[11px] tracking-[0.08em] text-shift-label">CLIP</div>
             <Toggle on={s.clipEnabled} onChange={s.toggleClip} label="Clip this media" />
           </div>
-          {s.clipEnabled && <ClipControls showRange />}
+
         </div>
       ) : s.isImage ? (
         <Section title="COMPRESSION">
@@ -261,11 +285,7 @@ function Modifiers() {
               />
             )}
           </div>
-          {s.clipEnabled && (
-            <div className="mt-[12px]">
-              <ClipControls />
-            </div>
-          )}
+
         </Section>
       )}
     </div>
@@ -279,7 +299,7 @@ function Modifiers() {
  * would date the moment a platform changed its mind. Original leads and is the
  * default, so the common case is one glance and no decision.
  */
-function AspectRatios() {
+function AspectRatios({ compact = false }: { compact?: boolean }) {
   const s = useShift();
   const size = s.aspectPreview;
   return (
@@ -289,16 +309,18 @@ function AspectRatios() {
           Original, and for a URL whose size nobody knows yet. */}
       <div className="mb-[10px] flex items-baseline justify-between gap-2">
         <span className="text-[11px] tracking-[0.08em] text-shift-label">ASPECT</span>
-        {size && (
+        {/* The preview's own header shows these when it is on screen; this is
+            the fallback for a source whose size is known without one. */}
+        {size && !s.previewImage && (
           <span className="font-mono text-[11px] text-shift-ghost">
             {size.width} × {size.height}
           </span>
         )}
       </div>
-      <div className="grid grid-cols-2 gap-[6px]">
+      <div className={compact ? "grid grid-cols-4 gap-[6px]" : "grid grid-cols-2 gap-[6px]"}>
         {ASPECT_ROWS.map((row) =>
           row.map((r) => (
-            <div key={r} className={row.length === 1 ? "col-span-2" : undefined}>
+            <div key={r} className={!compact && row.length === 1 ? "col-span-2" : undefined}>
               <div className="[&>button]:w-full">
                 <Chip
                   label={aspectLabel(r)}
@@ -390,7 +412,7 @@ function FrameControls() {
  * out uniform. Exposing them separately would let someone pick 15 fps, which
  * GIF cannot actually store.
  */
-function LoopSection() {
+function LoopSection({ compact = false }: { compact?: boolean }) {
   const s = useShift();
   const detail = LOOP_SIZES.find((l) => l.id === s.loopSize)?.detail;
   const name = s.format === "GIF" ? "GIF" : "Animated WEBP";
@@ -404,7 +426,7 @@ function LoopSection() {
     <Section title="LOOP">
       {/* Same two-column shape as ASPECT: choices left, the words that explain
           them to the right. Vertical room is the scarce dimension here. */}
-      <div className="flex items-start gap-[28px]">
+      <div className={compact ? "flex flex-col gap-2" : "flex items-start gap-[28px]"}>
         <div className="flex w-[228px] shrink-0 flex-wrap gap-[6px]">
           {LOOP_SIZES.map((l) => (
             <Chip
@@ -459,53 +481,39 @@ function Thumbnail() {
   );
 }
 
+function UrlPreviewStatus() {
+  const { playback } = useShift();
+  const labels = {
+    resolving: "Resolving link",
+    downloading: "Downloading preview",
+    preparing: "Preparing player",
+    ready: "Ready",
+  } as const;
+  if (playback.error) {
+    return (
+      <div className="mt-2 flex items-center gap-2 text-[11px] text-shift-muted" role="status">
+        <span>{playback.error}</span>
+        <button type="button" onClick={playback.retry} className="underline decoration-shift-quiet underline-offset-2 hover:text-shift-body">Retry</button>
+      </div>
+    );
+  }
+  if (!playback.status) return null;
+  const working = playback.status !== "ready";
+  return (
+    <div className="mt-2 flex items-center gap-2 text-[11px] text-shift-muted" role="status" aria-live="polite">
+      {working && <span aria-hidden="true" className="h-3 w-3 animate-spin rounded-full border border-shift-quiet border-t-shift-emerald" />}
+      <span>{labels[playback.status]}</span>
+      {working && <button type="button" onClick={playback.cancel} className="ml-1 underline decoration-shift-quiet underline-offset-2 hover:text-shift-body">Cancel</button>}
+    </div>
+  );
+}
+
 function FileBadge({ ext }: { ext: string }) {
   return (
     <div className="flex h-[58px] w-[58px] shrink-0 items-center justify-center rounded-[9px] bg-shift-track">
       <span className="font-mono text-[12px] font-semibold text-shift-dim">
         {ext}
       </span>
-    </div>
-  );
-}
-
-function ClipControls({ showRange }: { showRange?: boolean }) {
-  const s = useShift();
-  const inSec = parseTimestamp(s.clipIn);
-  const outSec = parseTimestamp(s.clipOut);
-  const total = s.duration ?? 0;
-
-  let range: { left: number; width: number } | null = null;
-  if (showRange && total > 0 && inSec != null && outSec != null && outSec > inSec) {
-    const left = Math.max(0, Math.min(100, (inSec / total) * 100));
-    range = { left, width: Math.max(0.5, Math.min(100 - left, ((outSec - inSec) / total) * 100)) };
-  }
-
-  return (
-    <div className="flex flex-col gap-3">
-      <div className="flex items-center gap-[14px]">
-        <TimeField label="IN" value={s.clipIn} onChange={s.setClipIn} invalid={!!s.clipError} />
-        <div className="mt-[14px] text-shift-ghost">–</div>
-        <TimeField label="OUT" value={s.clipOut} onChange={s.setClipOut} invalid={!!s.clipError} />
-        <div className="mt-[19px] font-mono text-[12px] text-shift-faint">
-          {s.clipError ? (
-            <span className="text-shift-danger">{s.clipError}</span>
-          ) : (
-            s.clipLabel && `${s.clipLabel} selected`
-          )}
-        </div>
-      </div>
-
-      {showRange && (
-        <div className="relative h-1 overflow-hidden rounded-sm bg-shift-track">
-          {range && (
-            <div
-              className="absolute inset-y-0 rounded-sm bg-shift-emerald transition-[left,width] duration-[140ms]"
-              style={{ left: `${range.left}%`, width: `${range.width}%` }}
-            />
-          )}
-        </div>
-      )}
     </div>
   );
 }

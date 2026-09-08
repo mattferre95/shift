@@ -126,6 +126,32 @@ impl PadColor {
     }
 }
 
+/// Where the picture sits relative to the frame it is being fitted into.
+///
+/// One shape describes both modes, which is what lets the UI draw a preview
+/// without knowing which it is looking at: the source, at the size it meets the
+/// canvas, offset from the canvas's top-left. Fit offsets are positive and the
+/// gap is padding; Fill offsets are negative and the overflow is cropped away.
+///
+/// Expressed in canvas pixels rather than output pixels on purpose. Any final
+/// resize scales canvas and content together, so proportions — which is all a
+/// preview needs — are identical either way.
+///
+/// This is also the seam a draggable crop would use later: moving the source
+/// inside the frame is a change to `offset`, and nothing else here would need
+/// to know.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContentBox {
+    pub canvas_width: u32,
+    pub canvas_height: u32,
+    /// The source at the size it reaches the crop or pad.
+    pub frame_width: u32,
+    pub frame_height: u32,
+    pub offset_x: i64,
+    pub offset_y: i64,
+}
+
 /// A resolved transform: resample to `scale` (when set), then crop or pad to
 /// `canvas`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -170,7 +196,6 @@ pub fn identity(source: (u32, u32)) -> Reframe {
 }
 
 impl Reframe {
-
     /// Whether this transform would actually change anything.
     ///
     /// Not the same as "no scale was set": asking for 16:9 from a source that
@@ -184,6 +209,26 @@ impl Reframe {
     /// The size the finished frame actually is.
     pub fn final_size(&self) -> (u32, u32) {
         self.post.unwrap_or(self.canvas)
+    }
+
+    /// Where the picture lands inside the canvas.
+    ///
+    /// The single computation behind both the exported filter offsets and the
+    /// preview the user sees, so the two cannot disagree.
+    pub fn content_box(&self) -> ContentBox {
+        let (fw, fh) = self.incoming();
+        let (cw, ch) = self.canvas;
+        ContentBox {
+            canvas_width: cw,
+            canvas_height: ch,
+            frame_width: fw,
+            frame_height: fh,
+            // Centred. Integer division here rather than an FFmpeg expression
+            // so the number the preview draws with is the number the encoder
+            // is given — see `filters_with`.
+            offset_x: (cw as i64 - fw as i64) / 2,
+            offset_y: (ch as i64 - fh as i64) / 2,
+        }
     }
 
     /// The size the frame actually has when it reaches the framing step.
@@ -209,14 +254,22 @@ impl Reframe {
             // A pure crop. Cropping at full resolution and shrinking the result
             // is cheaper than shrinking the whole frame and then throwing part
             // of it away, and the output is identical.
-            out.post = Some((even(self.canvas.0 as f64 * f), even(self.canvas.1 as f64 * f)));
+            out.post = Some((
+                even(self.canvas.0 as f64 * f),
+                even(self.canvas.1 as f64 * f),
+            ));
         } else {
             // There is already a resample in the chain, so fold the cap into it
             // rather than adding a second one.
-            out.canvas = (even(self.canvas.0 as f64 * f), even(self.canvas.1 as f64 * f));
+            out.canvas = (
+                even(self.canvas.0 as f64 * f),
+                even(self.canvas.1 as f64 * f),
+            );
             let incoming = self.incoming();
             out.scale = Some((even(incoming.0 as f64 * f), even(incoming.1 as f64 * f)));
-            out.post = self.post.map(|(w, h)| (even(w as f64 * f), even(h as f64 * f)));
+            out.post = self
+                .post
+                .map(|(w, h)| (even(w as f64 * f), even(h as f64 * f)));
             out.fix_up();
         }
         out
@@ -226,7 +279,9 @@ impl Reframe {
     /// something at least as large as the canvas, Fit must feed the pad
     /// something no larger. Rounding to even can put either out by a pixel.
     fn fix_up(&mut self) {
-        let Some((mut w, mut h)) = self.scale else { return };
+        let Some((mut w, mut h)) = self.scale else {
+            return;
+        };
         match self.mode {
             FrameMode::Fill => {
                 w = w.max(self.canvas.0);
@@ -262,11 +317,16 @@ impl Reframe {
         let incoming = self.incoming();
         if incoming != self.canvas {
             let (w, h) = self.canvas;
+            let b = self.content_box();
             match self.mode {
-                // Centred: what the eye expects, and the only choice that does
-                // not need a UI to explain it.
+                // Centred, with the offset written out rather than left to
+                // `(in_w-out_w)/2`. FFmpeg would evaluate that expression in
+                // floating point and round it its own way, which can land a
+                // pixel away from what `content_box` reports for an odd-sized
+                // source. Passing the number makes the preview and the export
+                // provably the same framing.
                 FrameMode::Fill => {
-                    out.push(format!("crop={w}:{h}:(in_w-out_w)/2:(in_h-out_h)/2"));
+                    out.push(format!("crop={w}:{h}:{}:{}", -b.offset_x, -b.offset_y));
                 }
                 FrameMode::Fit => {
                     // The format conversion is not decoration. Asked to pad
@@ -276,7 +336,12 @@ impl Reframe {
                     if pad == PadColor::Transparent {
                         out.push("format=rgba".into());
                     }
-                    out.push(format!("pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:{}", pad.as_ffmpeg()));
+                    out.push(format!(
+                        "pad={w}:{h}:{}:{}:{}",
+                        b.offset_x.max(0),
+                        b.offset_y.max(0),
+                        pad.as_ffmpeg()
+                    ));
                 }
             }
         }
@@ -327,8 +392,11 @@ fn non_trivial(r: Reframe) -> Option<Reframe> {
 /// Every mode but Original needs to know how big the source is.
 fn measurable(source: (u32, u32)) -> Result<()> {
     if source.0 == 0 || source.1 == 0 {
-        return Err(ShiftError::new("unknown_dimensions", "SHIFT couldn't read this file's size.")
-            .hint("Choose Original, which needs no measurements."));
+        return Err(ShiftError::new(
+            "unknown_dimensions",
+            "SHIFT couldn't read this file's size.",
+        )
+        .hint("Choose Original, which needs no measurements."));
     }
     Ok(())
 }
@@ -356,7 +424,14 @@ fn preset(source: (u32, u32), rw: u32, rh: u32, mode: FrameMode) -> Reframe {
                 (sw_f, sw_f / target)
             };
             let canvas = (even(w).min(even(sw_f)), even(h).min(even(sh_f)));
-            Reframe { source, scale: None, canvas, post: None, mode, upscales: false }
+            Reframe {
+                source,
+                scale: None,
+                canvas,
+                post: None,
+                mode,
+                upscales: false,
+            }
         }
         // A canvas of the target ratio whose longest edge matches the source's
         // longest edge, with the source scaled down to sit inside it. Padding
@@ -365,7 +440,11 @@ fn preset(source: (u32, u32), rw: u32, rh: u32, mode: FrameMode) -> Reframe {
         // held to the source's own scale and the picture shrinks to suit.
         FrameMode::Fit => {
             let cap = sw_f.max(sh_f);
-            let (cw, ch) = if target >= 1.0 { (cap, cap / target) } else { (cap * target, cap) };
+            let (cw, ch) = if target >= 1.0 {
+                (cap, cap / target)
+            } else {
+                (cap * target, cap)
+            };
             let f = (cw / sw_f).min(ch / sh_f);
             let mut r = Reframe {
                 source,
@@ -428,11 +507,18 @@ mod tests {
     const PORTRAIT: (u32, u32) = (1080, 1920);
 
     fn spec(ratio: AspectRatio, frame: FrameMode) -> AspectSpec {
-        AspectSpec { ratio, frame, width: None, height: None }
+        AspectSpec {
+            ratio,
+            frame,
+            width: None,
+            height: None,
+        }
     }
 
     fn got(source: (u32, u32), ratio: AspectRatio, frame: FrameMode) -> Reframe {
-        resolve(source, &spec(ratio, frame)).unwrap().expect("a transform")
+        resolve(source, &spec(ratio, frame))
+            .unwrap()
+            .expect("a transform")
     }
 
     /// How far the canvas is from the ratio it claims, as a fraction.
@@ -444,8 +530,14 @@ mod tests {
 
     #[test]
     fn original_changes_nothing() {
-        assert!(resolve(LANDSCAPE, &AspectSpec::default()).unwrap().is_none());
-        assert!(resolve(PORTRAIT, &spec(AspectRatio::Original, FrameMode::Fit)).unwrap().is_none());
+        assert!(resolve(LANDSCAPE, &AspectSpec::default())
+            .unwrap()
+            .is_none());
+        assert!(
+            resolve(PORTRAIT, &spec(AspectRatio::Original, FrameMode::Fit))
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -456,7 +548,9 @@ mod tests {
         // reached FFmpeg as an empty filter graph.
         for mode in [FrameMode::Fill, FrameMode::Fit] {
             assert!(
-                resolve(LANDSCAPE, &spec(AspectRatio::R16x9, mode)).unwrap().is_none(),
+                resolve(LANDSCAPE, &spec(AspectRatio::R16x9, mode))
+                    .unwrap()
+                    .is_none(),
                 "16:9 {mode:?} on a 16:9 source"
             );
         }
@@ -510,14 +604,23 @@ mod tests {
     #[test]
     fn landscape_to_portrait_fit_pads_and_keeps_everything() {
         let r = got(LANDSCAPE, AspectRatio::R9x16, FrameMode::Fit);
-        assert_eq!(r.canvas, (1080, 1920), "a 9:16 fit of a 1080p source is 1080x1920");
-        let (sw, sh) = r.scale.expect("Fit scales the picture down to sit inside the canvas");
+        assert_eq!(
+            r.canvas,
+            (1080, 1920),
+            "a 9:16 fit of a 1080p source is 1080x1920"
+        );
+        let (sw, sh) = r
+            .scale
+            .expect("Fit scales the picture down to sit inside the canvas");
         assert_eq!((sw, sh), (1080, 608));
         assert!(!r.upscales);
         // Every source pixel still present, uniformly scaled: no stretch.
         let fx = sw as f64 / LANDSCAPE.0 as f64;
         let fy = sh as f64 / LANDSCAPE.1 as f64;
-        assert!((fx - fy).abs() < 0.01, "axes scaled differently: {fx} vs {fy}");
+        assert!(
+            (fx - fy).abs() < 0.01,
+            "axes scaled differently: {fx} vs {fy}"
+        );
         let f = r.filters();
         assert!(f[0].starts_with("scale=1080:608"), "{f:?}");
         let pad = f.last().unwrap();
@@ -533,7 +636,11 @@ mod tests {
 
         let fit = got(LANDSCAPE, AspectRatio::R1x1, FrameMode::Fit);
         assert_eq!(fit.canvas, (1920, 1920));
-        assert_eq!(fit.scale, Some(LANDSCAPE), "a 1:1 fit of 1080p needs no resampling");
+        assert_eq!(
+            fit.scale,
+            Some(LANDSCAPE),
+            "a 1:1 fit of 1080p needs no resampling"
+        );
     }
 
     #[test]
@@ -564,19 +671,32 @@ mod tests {
         for src in sources {
             for (ratio, rw, rh) in ratios {
                 for mode in [FrameMode::Fill, FrameMode::Fit] {
-                    let Some(r) = resolve(src, &spec(ratio, mode)).unwrap() else { continue };
+                    let Some(r) = resolve(src, &spec(ratio, mode)).unwrap() else {
+                        continue;
+                    };
                     assert!(
                         ratio_error(&r, rw, rh) < 0.02,
                         "{src:?} → {rw}:{rh} {mode:?} gave {:?}",
                         r.canvas
                     );
-                    assert!(!r.upscales, "a preset must never enlarge: {src:?} {rw}:{rh} {mode:?}");
+                    assert!(
+                        !r.upscales,
+                        "a preset must never enlarge: {src:?} {rw}:{rh} {mode:?}"
+                    );
                     // No preset may resample above the source's own resolution.
                     if let Some((w, h)) = r.scale {
                         assert!(w <= src.0 && h <= src.1, "{src:?} scaled up to {w}x{h}");
                     }
-                    assert_eq!(r.canvas.0 % 2, 0, "odd width from {src:?} {rw}:{rh} {mode:?}");
-                    assert_eq!(r.canvas.1 % 2, 0, "odd height from {src:?} {rw}:{rh} {mode:?}");
+                    assert_eq!(
+                        r.canvas.0 % 2,
+                        0,
+                        "odd width from {src:?} {rw}:{rh} {mode:?}"
+                    );
+                    assert_eq!(
+                        r.canvas.1 % 2,
+                        0,
+                        "odd height from {src:?} {rw}:{rh} {mode:?}"
+                    );
                 }
             }
         }
@@ -595,7 +715,9 @@ mod tests {
                 AspectRatio::R4x3,
             ] {
                 for mode in [FrameMode::Fill, FrameMode::Fit] {
-                    let Some(r) = resolve(src, &spec(ratio, mode)).unwrap() else { continue };
+                    let Some(r) = resolve(src, &spec(ratio, mode)).unwrap() else {
+                        continue;
+                    };
                     let Some((w, h)) = r.scale else { continue };
                     let fx = w as f64 / src.0 as f64;
                     let fy = h as f64 / src.1 as f64;
@@ -624,16 +746,23 @@ mod tests {
 
     #[test]
     fn freeform_hits_the_size_asked_for() {
-        let r = custom(LANDSCAPE, 800, 800, FrameMode::Fill).unwrap().unwrap();
+        let r = custom(LANDSCAPE, 800, 800, FrameMode::Fill)
+            .unwrap()
+            .unwrap();
         assert_eq!(r.canvas, (800, 800));
         assert!(!r.upscales, "800 fits inside 1080, so nothing is enlarged");
         let (w, h) = r.scale.unwrap();
-        assert!(w >= 800 && h >= 800, "Fill must cover the canvas before cropping");
+        assert!(
+            w >= 800 && h >= 800,
+            "Fill must cover the canvas before cropping"
+        );
     }
 
     #[test]
     fn freeform_fit_never_crops() {
-        let r = custom(LANDSCAPE, 800, 800, FrameMode::Fit).unwrap().unwrap();
+        let r = custom(LANDSCAPE, 800, 800, FrameMode::Fit)
+            .unwrap()
+            .unwrap();
         let (w, h) = r.scale.unwrap();
         assert!(w <= 800 && h <= 800, "Fit must sit inside the canvas");
         assert!(r.filters().iter().any(|f| f.starts_with("pad=800:800")));
@@ -641,20 +770,36 @@ mod tests {
 
     #[test]
     fn freeform_reports_an_upscale_rather_than_hiding_it() {
-        let up = custom((640, 360), 1920, 1080, FrameMode::Fill).unwrap().unwrap();
-        assert!(up.upscales, "asking for more pixels than exist must be reported");
+        let up = custom((640, 360), 1920, 1080, FrameMode::Fill)
+            .unwrap()
+            .unwrap();
+        assert!(
+            up.upscales,
+            "asking for more pixels than exist must be reported"
+        );
 
-        let down = custom((1920, 1080), 640, 360, FrameMode::Fill).unwrap().unwrap();
+        let down = custom((1920, 1080), 640, 360, FrameMode::Fill)
+            .unwrap()
+            .unwrap();
         assert!(!down.upscales);
 
         // Exactly the source size is nothing to do at all, so there is no pass
         // to flag — and no pointless re-encode either.
-        assert!(custom((1920, 1080), 1920, 1080, FrameMode::Fill).unwrap().is_none());
+        assert!(custom((1920, 1080), 1920, 1080, FrameMode::Fill)
+            .unwrap()
+            .is_none());
     }
 
     #[test]
     fn freeform_rejects_nonsense_dimensions() {
-        for (w, h) in [(0, 100), (100, 0), (8, 100), (100, 9), (9000, 100), (100, 20000)] {
+        for (w, h) in [
+            (0, 100),
+            (100, 0),
+            (8, 100),
+            (100, 9),
+            (9000, 100),
+            (100, 20000),
+        ] {
             let err = custom(LANDSCAPE, w, h, FrameMode::Fill).unwrap_err();
             assert_eq!(err.code, "invalid_dimensions", "{w}x{h} should be refused");
         }
@@ -673,7 +818,9 @@ mod tests {
 
     #[test]
     fn freeform_dimensions_come_out_even() {
-        let r = custom(LANDSCAPE, 401, 777, FrameMode::Fill).unwrap().unwrap();
+        let r = custom(LANDSCAPE, 401, 777, FrameMode::Fill)
+            .unwrap()
+            .unwrap();
         assert_eq!(r.canvas.0 % 2, 0);
         assert_eq!(r.canvas.1 % 2, 0);
     }
@@ -685,8 +832,14 @@ mod tests {
         for src in [(16, 16), (32, 18), (2, 2)] {
             for ratio in [AspectRatio::R16x9, AspectRatio::R9x16, AspectRatio::R1x1] {
                 for mode in [FrameMode::Fill, FrameMode::Fit] {
-                    let Some(r) = resolve(src, &spec(ratio, mode)).unwrap() else { continue };
-                    assert!(r.canvas.0 >= 2 && r.canvas.1 >= 2, "{src:?} collapsed to {:?}", r.canvas);
+                    let Some(r) = resolve(src, &spec(ratio, mode)).unwrap() else {
+                        continue;
+                    };
+                    assert!(
+                        r.canvas.0 >= 2 && r.canvas.1 >= 2,
+                        "{src:?} collapsed to {:?}",
+                        r.canvas
+                    );
                     assert_eq!(r.canvas.0 % 2, 0);
                     assert_eq!(r.canvas.1 % 2, 0);
                     if let Some((w, h)) = r.scale {
@@ -700,7 +853,9 @@ mod tests {
     #[test]
     fn a_source_of_unknown_size_is_refused_rather_than_guessed() {
         assert_eq!(
-            resolve((0, 0), &spec(AspectRatio::R1x1, FrameMode::Fill)).unwrap_err().code,
+            resolve((0, 0), &spec(AspectRatio::R1x1, FrameMode::Fill))
+                .unwrap_err()
+                .code,
             "unknown_dimensions"
         );
         // Original needs no measurements, so it still works.
@@ -714,7 +869,10 @@ mod tests {
         assert_eq!(small.canvas.0.max(small.canvas.1), 480);
         assert!(ratio_error(&small, 9, 16) < 0.02);
         let (w, h) = small.scale.unwrap();
-        assert!(w <= small.canvas.0 && h <= small.canvas.1, "Fit must still sit inside");
+        assert!(
+            w <= small.canvas.0 && h <= small.canvas.1,
+            "Fit must still sit inside"
+        );
 
         // Capping never enlarges.
         let already_small = got((640, 360), AspectRatio::R1x1, FrameMode::Fill);
@@ -725,13 +883,43 @@ mod tests {
     fn a_capped_fill_still_covers_its_canvas() {
         let r = got(LANDSCAPE, AspectRatio::R1x1, FrameMode::Fill).capped(320);
         let (w, h) = r.scale.unwrap_or(r.source);
-        assert!(w >= r.canvas.0 && h >= r.canvas.1, "crop would read outside the frame");
+        assert!(
+            w >= r.canvas.0 && h >= r.canvas.1,
+            "crop would read outside the frame"
+        );
     }
 }
 
 #[cfg(test)]
 mod ordering_tests {
     use super::*;
+
+    fn spec(ratio: AspectRatio, frame: FrameMode) -> AspectSpec {
+        AspectSpec {
+            ratio,
+            frame,
+            width: None,
+            height: None,
+        }
+    }
+
+    fn got(source: (u32, u32), ratio: AspectRatio, frame: FrameMode) -> Reframe {
+        resolve(source, &spec(ratio, frame))
+            .unwrap()
+            .expect("a transform")
+    }
+
+    fn custom(source: (u32, u32), w: u32, h: u32, mode: FrameMode) -> Result<Option<Reframe>> {
+        resolve(
+            source,
+            &AspectSpec {
+                ratio: AspectRatio::Freeform,
+                frame: mode,
+                width: Some(w),
+                height: Some(h),
+            },
+        )
+    }
 
     #[test]
     fn a_capped_crop_crops_first_and_shrinks_second() {
@@ -776,8 +964,14 @@ mod ordering_tests {
         // channel is silently written as opaque black, so the format conversion
         // has to come first or the request is quietly ignored.
         let clear = r.filters_with(PadColor::Transparent);
-        let fmt = clear.iter().position(|f| f == "format=rgba").expect("format=rgba");
-        let pad = clear.iter().position(|f| f.starts_with("pad=")).expect("pad");
+        let fmt = clear
+            .iter()
+            .position(|f| f == "format=rgba")
+            .expect("format=rgba");
+        let pad = clear
+            .iter()
+            .position(|f| f.starts_with("pad="))
+            .expect("pad");
         assert!(fmt < pad, "{clear:?}");
         assert!(clear[pad].ends_with(":black@0"), "{clear:?}");
 
@@ -789,6 +983,135 @@ mod ordering_tests {
 
         // The default is black, which is what video wants.
         assert_eq!(r.filters(), black);
+    }
+
+    #[test]
+    fn the_content_box_is_exactly_what_the_filters_encode() {
+        // This is the whole basis of the preview: if these two ever diverge,
+        // the user is shown a framing the export does not produce.
+        let sources = [
+            (1920, 1080),
+            (1080, 1920),
+            (640, 360),
+            (1233, 567),
+            (33, 17),
+            (16, 16),
+        ];
+        for src in sources {
+            for ratio in [
+                AspectRatio::R16x9,
+                AspectRatio::R9x16,
+                AspectRatio::R1x1,
+                AspectRatio::R4x5,
+                AspectRatio::R4x3,
+            ] {
+                for mode in [FrameMode::Fill, FrameMode::Fit] {
+                    let Some(r) = resolve(src, &spec(ratio, mode)).unwrap() else {
+                        continue;
+                    };
+                    let b = r.content_box();
+                    let f = r.filters();
+
+                    match mode {
+                        FrameMode::Fill => {
+                            let crop = f
+                                .iter()
+                                .find(|x| x.starts_with("crop="))
+                                .unwrap_or_else(|| panic!("{src:?} {ratio:?}: no crop in {f:?}"));
+                            assert_eq!(
+                                *crop,
+                                format!(
+                                    "crop={}:{}:{}:{}",
+                                    b.canvas_width, b.canvas_height, -b.offset_x, -b.offset_y
+                                ),
+                                "{src:?} {ratio:?}"
+                            );
+                            // The crop window must sit inside the frame it reads.
+                            assert!(-b.offset_x >= 0 && -b.offset_y >= 0, "{src:?} {ratio:?}");
+                            assert!(
+                                (-b.offset_x) as u32 + b.canvas_width <= b.frame_width,
+                                "{src:?} {ratio:?} reads past the right edge"
+                            );
+                            assert!(
+                                (-b.offset_y) as u32 + b.canvas_height <= b.frame_height,
+                                "{src:?} {ratio:?} reads past the bottom edge"
+                            );
+                        }
+                        FrameMode::Fit => {
+                            let pad = f
+                                .iter()
+                                .find(|x| x.starts_with("pad="))
+                                .unwrap_or_else(|| panic!("{src:?} {ratio:?}: no pad in {f:?}"));
+                            assert!(
+                                pad.starts_with(&format!(
+                                    "pad={}:{}:{}:{}:",
+                                    b.canvas_width,
+                                    b.canvas_height,
+                                    b.offset_x.max(0),
+                                    b.offset_y.max(0)
+                                )),
+                                "{src:?} {ratio:?}: {pad} vs {b:?}"
+                            );
+                            // The picture must sit wholly inside the canvas.
+                            assert!(b.offset_x >= 0 && b.offset_y >= 0, "{src:?} {ratio:?}");
+                            assert!(
+                                b.offset_x as u32 + b.frame_width <= b.canvas_width,
+                                "{src:?} {ratio:?} overflows the canvas"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_content_box_describes_a_freeform_request_too() {
+        for (w, h, mode) in [
+            (800, 800, FrameMode::Fill),
+            (800, 800, FrameMode::Fit),
+            (1920, 1080, FrameMode::Fill),
+            (200, 900, FrameMode::Fit),
+        ] {
+            let r = custom((1600, 900), w, h, mode).unwrap().unwrap();
+            let b = r.content_box();
+            assert_eq!((b.canvas_width, b.canvas_height), r.canvas);
+            match mode {
+                FrameMode::Fill => {
+                    assert!(b.frame_width >= b.canvas_width && b.frame_height >= b.canvas_height);
+                    assert!(b.offset_x <= 0 && b.offset_y <= 0);
+                }
+                FrameMode::Fit => {
+                    assert!(b.frame_width <= b.canvas_width && b.frame_height <= b.canvas_height);
+                    assert!(b.offset_x >= 0 && b.offset_y >= 0);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_capped_transform_keeps_the_same_proportions_it_previews() {
+        // The preview works in canvas pixels; a loop preset then shrinks canvas
+        // and content together. The ratios the UI draws with must survive that.
+        let r = got((1280, 720), AspectRatio::R9x16, FrameMode::Fill);
+        let capped = r.capped(480);
+        let (a, b) = (r.content_box(), capped.content_box());
+        let ratio = |c: &ContentBox| {
+            (
+                c.frame_width as f64 / c.canvas_width as f64,
+                c.offset_x as f64 / c.canvas_width as f64,
+            )
+        };
+        let (fa, oa) = ratio(&a);
+        let (fb, ob) = ratio(&b);
+        assert!(
+            (fa - fb).abs() < 0.02,
+            "frame proportion drifted: {fa} vs {fb}"
+        );
+        assert!(
+            (oa - ob).abs() < 0.02,
+            "offset proportion drifted: {oa} vs {ob}"
+        );
     }
 
     #[test]
@@ -807,7 +1130,10 @@ mod ordering_tests {
         .unwrap()
         .unwrap();
         let f = r.filters();
-        let scale = f.iter().position(|x| x.starts_with("scale=")).expect("scale");
+        let scale = f
+            .iter()
+            .position(|x| x.starts_with("scale="))
+            .expect("scale");
         assert_eq!(f[scale + 1], "setsar=1", "{f:?}");
 
         // A pure crop resamples nothing, so it needs no correction.
@@ -822,7 +1148,11 @@ mod ordering_tests {
         )
         .unwrap()
         .unwrap();
-        assert!(!crop.filters().iter().any(|x| x == "setsar=1"), "{:?}", crop.filters());
+        assert!(
+            !crop.filters().iter().any(|x| x == "setsar=1"),
+            "{:?}",
+            crop.filters()
+        );
     }
 
     #[test]
@@ -840,8 +1170,14 @@ mod ordering_tests {
         .unwrap();
         for pad in [PadColor::Black, PadColor::Transparent] {
             let f = r.filters_with(pad);
-            assert!(!f.iter().any(|x| x.starts_with("pad=")), "Fill does not pad: {f:?}");
-            assert!(!f.iter().any(|x| x == "format=rgba"), "and needs no alpha: {f:?}");
+            assert!(
+                !f.iter().any(|x| x.starts_with("pad=")),
+                "Fill does not pad: {f:?}"
+            );
+            assert!(
+                !f.iter().any(|x| x == "format=rgba"),
+                "and needs no alpha: {f:?}"
+            );
         }
     }
 
@@ -878,12 +1214,24 @@ mod ordering_tests {
         for mode in [FrameMode::Fill, FrameMode::Fit] {
             for ratio in [AspectRatio::R16x9, AspectRatio::R9x16, AspectRatio::R4x5] {
                 for src in [(1920, 1080), (1080, 1920), (640, 480)] {
-                    let spec = AspectSpec { ratio, frame: mode, width: None, height: None };
-                    let Some(r) = resolve(src, &spec).unwrap() else { continue };
+                    let spec = AspectSpec {
+                        ratio,
+                        frame: mode,
+                        width: None,
+                        height: None,
+                    };
+                    let Some(r) = resolve(src, &spec).unwrap() else {
+                        continue;
+                    };
                     let f = r.capped(480).filters();
-                    let frame_at = f.iter().position(|x| x.starts_with("crop=") || x.starts_with("pad="));
+                    let frame_at = f
+                        .iter()
+                        .position(|x| x.starts_with("crop=") || x.starts_with("pad="));
                     if let (Some(i), Some(_)) = (frame_at, r.scale) {
-                        assert!(f[0].starts_with("scale="), "{src:?} {ratio:?} {mode:?}: {f:?}");
+                        assert!(
+                            f[0].starts_with("scale="),
+                            "{src:?} {ratio:?} {mode:?}: {f:?}"
+                        );
                         assert!(i > 0);
                     }
                 }
