@@ -21,6 +21,16 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import * as ipc from "@/lib/ipc";
 import { formatTimestamp, parseTimestamp } from "@/lib/format";
 import {
+  applyTrimPreset,
+  defaultTrimRange,
+  moveTrimRange,
+  moveTrimStart,
+  resizeTrimEnd,
+  resizeTrimStart,
+  type TrimDurationPreset,
+  type TrimRange,
+} from "./trim";
+import {
   compressionOptions,
   ASPECT_DEFAULT,
   isAnimationFormat,
@@ -77,6 +87,7 @@ interface ShiftState {
   clipEnabled: boolean;
   clipIn: string;
   clipOut: string;
+  clipDurationPreset: TrimDurationPreset;
   clipError: string | null;
   clipLabel: string | null;
   /** Length of the current IN/OUT range, so the loop cap can be enforced. */
@@ -145,8 +156,12 @@ interface ShiftApi extends ShiftState {
   setFormat: (f: OutputFormat) => void;
   setQuality: (q: string) => void;
   toggleClip: () => void;
+  setClipDurationPreset: (preset: TrimDurationPreset) => void;
   setClipIn: (v: string) => void;
   setClipOut: (v: string) => void;
+  resizeClipIn: (seconds: number) => void;
+  resizeClipOut: (seconds: number) => void;
+  moveClipRange: (start: number) => void;
   startExport: () => void;
   saving: boolean;
   cancel: () => void;
@@ -164,7 +179,8 @@ const initial: ShiftState = {
   quality: "best",
   clipEnabled: false,
   clipIn: "00:00.000",
-  clipOut: "00:10.000",
+  clipOut: "00:15.000",
+  clipDurationPreset: 15,
   clipError: null,
   clipLabel: null,
   clipSeconds: null,
@@ -181,6 +197,21 @@ const initial: ShiftState = {
   health: null,
   healthError: null,
 };
+
+const trimRangeFrom = (state: ShiftState, duration: number | null): TrimRange => {
+  const fallback = defaultTrimRange(duration);
+  return {
+    start: parseTimestamp(state.clipIn) ?? fallback.start,
+    end: parseTimestamp(state.clipOut) ?? fallback.end,
+    preset: state.clipDurationPreset,
+  };
+};
+
+const trimFields = (range: TrimRange) => ({
+  clipIn: formatTimestamp(range.start),
+  clipOut: formatTimestamp(range.end),
+  clipDurationPreset: range.preset,
+});
 
 const Ctx = createContext<ShiftApi | null>(null);
 
@@ -264,6 +295,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
         .analyzeUrl(value)
         .then((media) => {
           const defaultOut: OutputFormat = media.hasVideo ? "MP4" : "MP3";
+          const trim = defaultTrimRange(media.duration);
           set((prev) => ({
             ...prev,
             screen: "url",
@@ -273,8 +305,9 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
             format: defaultOut,
             quality: media.qualities[0]?.id ?? "best",
             clipEnabled: false,
-            clipIn: "00:00.000",
-            clipOut: formatTimestamp(Math.min(10, media.duration ?? 10)),
+            clipIn: formatTimestamp(trim.start),
+            clipOut: formatTimestamp(trim.end),
+            clipDurationPreset: trim.preset,
             clipError: null,
             clipLabel: null,
             clipSeconds: null,
@@ -298,6 +331,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
         .then((media) => {
           const defaultOut: OutputFormat =
             media.kind === "image" ? "JPG" : media.hasVideo ? "MP4" : "MP3";
+          const trim = defaultTrimRange(media.duration);
           set((prev) => ({
             ...prev,
             screen: "local",
@@ -307,8 +341,9 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
             format: media.outputs.includes(defaultOut) ? defaultOut : media.outputs[0],
             compression: "none",
             clipEnabled: false,
-            clipIn: "00:00.000",
-            clipOut: formatTimestamp(Math.min(10, media.duration ?? 10)),
+            clipIn: formatTimestamp(trim.start),
+            clipOut: formatTimestamp(trim.end),
+            clipDurationPreset: trim.preset,
             clipError: null,
             clipLabel: null,
             clipSeconds: null,
@@ -653,6 +688,10 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
             next.clipEnabled = true;
             next.clipIn = "00:00.000";
             next.clipOut = formatTimestamp(Math.min(lim.default, duration ?? lim.default));
+            next.clipDurationPreset =
+              lim.default === 10 || lim.default === 15 || lim.default === 30 || lim.default === 60
+                ? lim.default
+                : "custom";
           }
         }
         return next;
@@ -693,8 +732,48 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
     setLoopSize: (l) => patch({ loopSize: l }),
     setQuality: (q) => patch({ quality: q }),
     toggleClip: () => set((prev) => ({ ...prev, clipEnabled: !prev.clipEnabled })),
-    setClipIn: (v) => patch({ clipIn: v }),
-    setClipOut: (v) => patch({ clipOut: v }),
+    setClipDurationPreset: (preset) =>
+      set((prev) => ({
+        ...prev,
+        ...trimFields(applyTrimPreset(trimRangeFrom(prev, duration), preset, duration)),
+      })),
+    setClipIn: (v) =>
+      set((prev) => {
+        const seconds = parseTimestamp(v);
+        if (seconds == null) return { ...prev, clipIn: v };
+        const range = moveTrimStart(trimRangeFrom(prev, duration), seconds, duration);
+        return {
+          ...prev,
+          ...trimFields(range),
+          clipIn: Math.abs(range.start - seconds) < 0.0005 ? v : formatTimestamp(range.start),
+        };
+      }),
+    setClipOut: (v) =>
+      set((prev) => {
+        const seconds = parseTimestamp(v);
+        if (seconds == null) return { ...prev, clipOut: v };
+        const range = resizeTrimEnd(trimRangeFrom(prev, duration), seconds, duration);
+        return {
+          ...prev,
+          ...trimFields(range),
+          clipOut: Math.abs(range.end - seconds) < 0.0005 ? v : formatTimestamp(range.end),
+        };
+      }),
+    resizeClipIn: (seconds) =>
+      set((prev) => ({
+        ...prev,
+        ...trimFields(resizeTrimStart(trimRangeFrom(prev, duration), seconds)),
+      })),
+    resizeClipOut: (seconds) =>
+      set((prev) => ({
+        ...prev,
+        ...trimFields(resizeTrimEnd(trimRangeFrom(prev, duration), seconds, duration)),
+      })),
+    moveClipRange: (start) =>
+      set((prev) => ({
+        ...prev,
+        ...trimFields(moveTrimRange(trimRangeFrom(prev, duration), start, duration)),
+      })),
     startExport: () => {
       void startExport();
     },

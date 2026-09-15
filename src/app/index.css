@@ -159,3 +159,5 @@ input, textarea { user-select: text; }
 .trim-bound { appearance: none; background: transparent; pointer-events: none; }
 .trim-bound::-webkit-slider-runnable-track { height: 8px; background: transparent; }
 .trim-bound::-webkit-slider-thumb { appearance: none; pointer-events: auto; cursor: ew-resize; width: 9px; height: 20px; margin-top: -6px; border-radius: 3px; background: var(--color-shift-emerald); }
+.trim-window { cursor: grab; }
+.trim-window:active { cursor: grabbing; }
