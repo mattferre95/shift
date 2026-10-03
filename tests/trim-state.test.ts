@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
   applyTrimPreset,
+  clampTrimRange,
   defaultTrimRange,
   moveTrimRange,
   moveTrimStart,
@@ -51,6 +52,11 @@ describe("trim range", () => {
 
   test("a preset clamps at EOF without moving the requested IN", () => {
     expect(moveTrimStart(range(0, 15), 115, 120)).toEqual(range(115, 120));
+  });
+
+  test("exact playback duration clamps rounded provider metadata", () => {
+    expect(clampTrimRange(range(0, 6), 5.867)).toEqual(range(0, 5.867));
+    expect(clampTrimRange(range(2, 4), 5.867)).toEqual(range(2, 4));
   });
 
   test("IN and OUT handles cannot cross", () => {

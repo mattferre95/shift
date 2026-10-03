@@ -25,6 +25,16 @@ export function defaultTrimRange(duration: number | null): TrimRange {
   return applyTrimPreset({ start: 0, end: 0, preset: DEFAULT_TRIM_DURATION }, DEFAULT_TRIM_DURATION, duration);
 }
 
+/** Reconcile provider metadata with the exact duration measured by playback. */
+export function clampTrimRange(range: TrimRange, duration: number): TrimRange {
+  if (range.end <= duration) return range;
+  return {
+    ...range,
+    start: Math.min(range.start, duration),
+    end: duration,
+  };
+}
+
 export function applyTrimPreset(
   range: TrimRange,
   preset: TrimDurationPreset,

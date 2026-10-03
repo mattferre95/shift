@@ -22,6 +22,7 @@ import * as ipc from "@/lib/ipc";
 import { formatTimestamp, parseTimestamp } from "@/lib/format";
 import {
   applyTrimPreset,
+  clampTrimRange,
   defaultTrimRange,
   moveTrimRange,
   moveTrimStart,
@@ -519,6 +520,21 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
   const [validatedClip, setValidatedClip] = useState<string | null>(null);
   const clipKey = JSON.stringify([s.clipIn, s.clipOut, duration]);
   // ---- clip ---------------------------------------------------------------
+  // Provider metadata can publish a rounded duration, while the player later
+  // measures the exact file. Keep the one authoritative range inside that
+  // measured boundary without moving a valid user-selected IN point.
+  useEffect(() => {
+    if (!s.clipEnabled || duration == null) return;
+    set((prev) => {
+      const range = trimRangeFrom(prev, duration);
+      if (range.end <= duration + 0.0005) return prev;
+      return {
+        ...prev,
+        ...trimFields(clampTrimRange(range, duration)),
+      };
+    });
+  }, [s.clipEnabled, duration]);
+
   useEffect(() => {
     if (!s.clipEnabled) {
       patch({ clipError: null, clipLabel: null, clipSeconds: null });
