@@ -44,6 +44,7 @@ pub struct LocalMedia {
     pub width: Option<u32>,
     pub height: Option<u32>,
     pub has_video: bool,
+    pub has_audio: bool,
     /// Output chips this file can actually produce.
     pub outputs: Vec<String>,
     /// Images only: whether the source carries transparency. The UI uses it to
@@ -100,6 +101,7 @@ pub async fn analyze_file(path: String) -> Result<LocalMedia> {
                 width: Some(info.width),
                 height: Some(info.height),
                 has_video: false,
+                has_audio: false,
                 outputs: profiles::image_options(info.has_alpha)
                     .iter()
                     .map(|f| f.label().to_string())
@@ -127,6 +129,7 @@ pub async fn analyze_file(path: String) -> Result<LocalMedia> {
             width: info.video.as_ref().and_then(|v| v.width),
             height: info.video.as_ref().and_then(|v| v.height),
             has_video: info.has_video(),
+            has_audio: info.audio.is_some(),
             outputs: profiles::options_for(&info)
                 .iter()
                 .map(|f| f.label().to_string())

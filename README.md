@@ -44,6 +44,7 @@ converters to navigate.
   **MP3 · WAV · M4A · AAC · FLAC · AIFF · OGG · OPUS**
 - Export **MP4 · MOV · WEBM** and **MP3 · M4A · WAV · FLAC**
 - Convert between compatible formats, copying streams untouched when possible
+- Keep the source sound or remove the audio track entirely from video exports
 - Trim to an exact range
 - Extract the audio from a video — to **M4A** straight from an MP4 this is a
   lossless container change, not a second generation

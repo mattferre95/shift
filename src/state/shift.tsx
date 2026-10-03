@@ -84,6 +84,7 @@ interface ShiftState {
   localMedia: LocalMedia | null;
   format: OutputFormat;
   quality: string;
+  soundEnabled: boolean;
   clipEnabled: boolean;
   clipIn: string;
   clipOut: string;
@@ -155,6 +156,7 @@ interface ShiftApi extends ShiftState {
   setDragging: (v: boolean) => void;
   setFormat: (f: OutputFormat) => void;
   setQuality: (q: string) => void;
+  toggleSound: () => void;
   toggleClip: () => void;
   setClipDurationPreset: (preset: TrimDurationPreset) => void;
   setClipIn: (v: string) => void;
@@ -177,6 +179,7 @@ const initial: ShiftState = {
   localMedia: null,
   format: "MP4",
   quality: "best",
+  soundEnabled: true,
   clipEnabled: false,
   clipIn: "00:00.000",
   clipOut: "00:15.000",
@@ -304,6 +307,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
             localMedia: null,
             format: defaultOut,
             quality: media.qualities[0]?.id ?? "best",
+            soundEnabled: true,
             clipEnabled: false,
             clipIn: formatTimestamp(trim.start),
             clipOut: formatTimestamp(trim.end),
@@ -340,6 +344,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
             urlMedia: null,
             format: media.outputs.includes(defaultOut) ? defaultOut : media.outputs[0],
             compression: "none",
+            soundEnabled: true,
             clipEnabled: false,
             clipIn: formatTimestamp(trim.start),
             clipOut: formatTimestamp(trim.end),
@@ -569,6 +574,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
       compression: isImage ? s.compression : null,
       loopSize: isLoop ? s.loopSize : null,
       aspect: showAspect ? s.aspect : null,
+      soundEnabled: s.soundEnabled,
       destinationPath: null,
     };
 
@@ -603,7 +609,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
     } finally {
       setSaving(false);
     }
-  }, [canExport, saving, s.urlMedia, s.localMedia, s.quality, s.format, s.clipEnabled, s.clipIn, s.clipOut, s.outputDir, s.compression, s.loopSize, s.aspect, isImage, isLoop, showAspect, patch]);
+  }, [canExport, saving, s.urlMedia, s.localMedia, s.quality, s.format, s.soundEnabled, s.clipEnabled, s.clipIn, s.clipOut, s.outputDir, s.compression, s.loopSize, s.aspect, isImage, isLoop, showAspect, patch]);
 
   const cancel = useCallback(() => {
     const id = s.job?.id ?? jobRef.current;
@@ -731,6 +737,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
     toggleAspectLock: () => setAspectLocked((v) => !v),
     setLoopSize: (l) => patch({ loopSize: l }),
     setQuality: (q) => patch({ quality: q }),
+    toggleSound: () => set((prev) => ({ ...prev, soundEnabled: !prev.soundEnabled })),
     toggleClip: () => set((prev) => ({ ...prev, clipEnabled: !prev.clipEnabled })),
     setClipDurationPreset: (preset) =>
       set((prev) => ({
@@ -762,7 +769,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
     resizeClipIn: (seconds) =>
       set((prev) => ({
         ...prev,
-        ...trimFields(resizeTrimStart(trimRangeFrom(prev, duration), seconds)),
+        ...trimFields(resizeTrimStart(trimRangeFrom(prev, duration), seconds, duration)),
       })),
     resizeClipOut: (seconds) =>
       set((prev) => ({

@@ -12,18 +12,25 @@ export function formatBytes(bytes: number | null | undefined): string {
   return `${n.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
 }
 
-/** `12:42` / `1:02:42` — the compact form the design uses for media length. */
-export function formatDuration(seconds: number | null | undefined): string {
+/**
+ * `00:05` / `65:04` — the one user-facing clock used by media and trim UI.
+ * Minutes deliberately keep growing past 59; fractional precision stays in
+ * state and export requests rather than leaking into the compact display.
+ */
+export function formatMediaTime(seconds: number | null | undefined): string {
   if (seconds == null || !Number.isFinite(seconds) || seconds < 0) return "—";
-  const total = Math.round(seconds);
+  const total = Math.floor(seconds);
   const s = total % 60;
-  const m = Math.floor(total / 60) % 60;
-  const h = Math.floor(total / 3600);
-  const pad = (v: number) => String(v).padStart(2, "0");
-  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+  const m = Math.floor(total / 60);
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
-/** `02:52.000` — the editable form used by the IN/OUT fields. */
+/** Compact media length, kept as an alias for existing non-player call sites. */
+export function formatDuration(seconds: number | null | undefined): string {
+  return formatMediaTime(seconds);
+}
+
+/** Precise transport value used by validation and export, never as UI copy. */
 export function formatTimestamp(seconds: number): string {
   const totalMs = Math.max(0, Math.round(seconds * 1000));
   const ms = totalMs % 1000;

@@ -332,6 +332,32 @@ pub fn build_plan(
     aspect_spec: &AspectSpec,
     output: &Path,
 ) -> Result<EncodePlan> {
+    build_plan_with_audio(
+        input,
+        probe,
+        format,
+        clip,
+        loop_size,
+        aspect_spec,
+        true,
+        output,
+    )
+}
+
+/// Build a plan while honoring the video output's source-audio preference.
+/// Audio-only outputs ignore this flag; silent animations already have their
+/// own path and never carry audio.
+#[allow(clippy::too_many_arguments)]
+pub fn build_plan_with_audio(
+    input: &Path,
+    probe: &MediaProbe,
+    format: OutputFormat,
+    clip: Option<ClipRange>,
+    loop_size: LoopSize,
+    aspect_spec: &AspectSpec,
+    sound_enabled: bool,
+    output: &Path,
+) -> Result<EncodePlan> {
     if format.is_audio_only() && probe.audio.is_none() {
         return Err(
             ShiftError::new("no_audio", "This file has no audio to extract.")
@@ -406,9 +432,12 @@ pub fn build_plan(
         let can_copy_audio =
             probe.audio.is_none() || (!trimming && audio_codec_fits(format, a_src));
 
-        if can_copy_video && can_copy_audio {
+        if can_copy_video && (!sound_enabled || can_copy_audio) {
             args.push("-c".into());
             args.push("copy".into());
+            if !sound_enabled {
+                args.push("-an".into());
+            }
             remuxed = true;
         } else {
             if let Some(chain) = reframe
@@ -419,7 +448,9 @@ pub fn build_plan(
                 args.push(chain);
             }
             args.extend(video_encoder(format));
-            if probe.audio.is_some() {
+            if !sound_enabled {
+                args.push("-an".into());
+            } else if probe.audio.is_some() {
                 if can_copy_audio {
                     args.push("-c:a".into());
                     args.push("copy".into());

@@ -43,8 +43,10 @@ describe("trim range", () => {
     expect(resizeTrimEnd(range(20, 35), 40, 120)).toEqual(range(20, 40, "custom"));
   });
 
-  test("resizing IN switches the range to Custom", () => {
-    expect(resizeTrimStart(range(20, 35), 25)).toEqual(range(25, 35, "custom"));
+  test("dragging IN preserves the preset and moves OUT", () => {
+    expect(resizeTrimStart(range(20, 35), 25, 120)).toEqual(range(25, 40, 15));
+    expect(resizeTrimStart(range(20, 30, 10), 42, 120)).toEqual(range(42, 52, 10));
+    expect(resizeTrimStart(range(20, 80, 60), 55, 120)).toEqual(range(55, 115, 60));
   });
 
   test("a preset clamps at EOF without moving the requested IN", () => {
@@ -52,7 +54,7 @@ describe("trim range", () => {
   });
 
   test("IN and OUT handles cannot cross", () => {
-    const movedIn = resizeTrimStart(range(2, 4), 7);
+    const movedIn = resizeTrimStart(range(2, 4, "custom"), 7, 8);
     const movedOut = resizeTrimEnd(range(2, 4), 1, 8);
     expect(movedIn.start).toBeLessThan(movedIn.end);
     expect(movedOut.end).toBeGreaterThan(movedOut.start);

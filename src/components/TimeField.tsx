@@ -1,25 +1,41 @@
+import { useEffect, useState } from "react";
+
 /** A monospace IN/OUT field. Values are validated in the native layer. */
 export function TimeField({
   label,
-  value,
+  displayValue,
   onChange,
   invalid,
 }: {
   label: string;
-  value: string;
+  displayValue: string;
   onChange: (v: string) => void;
   invalid?: boolean;
 }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(displayValue);
+  useEffect(() => {
+    if (!editing) setDraft(displayValue);
+  }, [displayValue, editing]);
+
   return (
     <label className="block">
       <span className="mb-[5px] block text-[10px] tracking-[0.06em] text-shift-label">{label}</span>
       <input
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
+        value={editing ? draft : displayValue}
+        onFocus={() => {
+          setDraft(displayValue);
+          setEditing(true);
+        }}
+        onBlur={() => setEditing(false)}
+        onChange={(e) => {
+          setDraft(e.target.value);
+          onChange(e.target.value);
+        }}
         spellCheck={false}
         autoComplete="off"
         inputMode="numeric"
-        placeholder="00:00.000"
+        placeholder="00:00"
         className={[
           "w-[110px] rounded-md px-[10px] py-[7px]",
           "bg-shift-input font-mono text-[13px] text-shift-body",

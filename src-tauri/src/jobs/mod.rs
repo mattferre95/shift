@@ -112,11 +112,19 @@ pub struct ExportRequest {
     /// Visual outputs only. Ignored by audio, which has no shape.
     #[serde(default)]
     pub aspect: Option<AspectSpec>,
+    /// Video outputs only. False removes the audio stream rather than encoding
+    /// silence. Audio exports deliberately ignore this preference.
+    #[serde(default = "default_true")]
+    pub sound_enabled: bool,
     /// Full path chosen in the native Save panel. When present the user has
     /// already named the file and confirmed any overwrite, so SHIFT writes
     /// exactly there instead of inventing a collision-safe name.
     #[serde(default)]
     pub destination_path: Option<String>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 // --------------------------------------------------------------------- event
@@ -434,6 +442,7 @@ mod tests {
             compression: None,
             loop_size: None,
             aspect: None,
+            sound_enabled: true,
             destination_path: None,
         }
     }
@@ -484,6 +493,7 @@ mod tests {
             compression: None,
             loop_size: None,
             aspect: None,
+            sound_enabled: true,
             destination_path: None,
         };
         assert_eq!(
@@ -688,13 +698,14 @@ fn execute(
 
     let work_dir = temp.sub("out")?;
     let temp_output = work_dir.join(format!("output.{}", request.format.ext()));
-    let plan = profiles::build_plan(
+    let plan = profiles::build_plan_with_audio(
         &source_path,
         &probe,
         request.format,
         clip,
         request.loop_size.unwrap_or_default(),
         &request.aspect.unwrap_or_default(),
+        request.sound_enabled,
         &temp_output,
     )?;
 

@@ -52,10 +52,9 @@ export function moveTrimStart(
 export function resizeTrimStart(
   range: TrimRange,
   value: number,
+  duration: number | null,
 ): TrimRange {
-  const start = clamp(value, 0, range.end - MIN_RANGE);
-  const changedDuration = Math.abs((range.end - start) - (range.end - range.start)) >= MIN_RANGE;
-  return { ...range, start, preset: changedDuration ? "custom" : range.preset };
+  return moveTrimStart(range, value, duration);
 }
 
 export function resizeTrimEnd(

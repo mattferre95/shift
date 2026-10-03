@@ -242,6 +242,8 @@ function Modifiers() {
         </Section>
       )}
 
+      <SoundControl />
+
       {isUrl ? (
         <div>
           <div className="mb-[10px] flex items-center justify-between">
@@ -289,6 +291,51 @@ function Modifiers() {
         </Section>
       )}
     </div>
+  );
+}
+
+export function SoundControl() {
+  const s = useShift();
+  return <SoundControlView
+    sourceMoves={s.sourceMoves}
+    isImage={s.isImage}
+    format={s.format}
+    hasAudio={s.localMedia?.hasAudio ?? s.playback.info?.hasAudio ?? null}
+    soundEnabled={s.soundEnabled}
+    toggleSound={s.toggleSound}
+  />;
+}
+
+export function SoundControlView({
+  sourceMoves,
+  isImage,
+  format,
+  hasAudio,
+  soundEnabled,
+  toggleSound,
+}: {
+  sourceMoves: boolean;
+  isImage: boolean;
+  format: OutputFormat;
+  hasAudio: boolean | null;
+  soundEnabled: boolean;
+  toggleSound: () => void;
+}) {
+  const applies = sourceMoves && !isImage && !isAudioFormat(format) && !isAnimationFormat(format);
+  if (!applies || hasAudio == null) return null;
+  return (
+    <Section title="SOUND">
+      {hasAudio ? (
+        <Chip
+          label={soundEnabled ? "ON" : "OFF"}
+          selected={soundEnabled}
+          onClick={toggleSound}
+          title={soundEnabled ? "Remove sound from preview and export" : "Keep source sound"}
+        />
+      ) : (
+        <span className="text-[11px] text-shift-ghost">No audio</span>
+      )}
+    </Section>
   );
 }
 

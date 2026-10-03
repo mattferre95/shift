@@ -193,6 +193,7 @@ export interface LocalMedia {
   width: number | null;
   height: number | null;
   hasVideo: boolean;
+  hasAudio: boolean;
   outputs: OutputFormat[];
   /** Images only: transparency, which decides whether AVIF is on offer. */
   hasAlpha: boolean;
@@ -259,6 +260,8 @@ export interface ExportRequest {
   loopSize: LoopSize | null;
   /** Visual outputs only; ignored by audio, which has no shape. */
   aspect: AspectSpec | null;
+  /** Video outputs only. False removes the audio stream entirely. */
+  soundEnabled: boolean;
   /** Full path chosen in the native Save panel. */
   destinationPath: string | null;
 }

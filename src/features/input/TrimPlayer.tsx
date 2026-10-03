@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } f
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { useShift } from "@/state/shift";
 import { TRIM_DURATION_PRESETS } from "@/state/trim";
-import { formatTimestamp, parseTimestamp } from "@/lib/format";
+import { formatMediaTime, formatTimestamp, parseTimestamp } from "@/lib/format";
 import { TimeField } from "@/components/TimeField";
 
 export function TrimPlayer() {
@@ -101,6 +101,7 @@ export function TrimPlayer() {
       : info && <div className={info.hasVideo ? "mb-2 flex h-[180px] items-center justify-center overflow-hidden rounded-md bg-black" : ""}>
         <div style={info.hasVideo ? box ? { position: "relative", overflow: "hidden", width: box.canvasWidth * scale, height: box.canvasHeight * scale } : { width: "100%", height: "100%" } : { height: 0, overflow: "hidden" }}>
           <video ref={media} src={convertFileSrc(info.path)} preload="auto" playsInline
+            muted={!s.soundEnabled}
             aria-label={info.hasVideo ? "Media preview" : "Audio playback"}
             style={box && info.hasVideo ? { position: "absolute", maxWidth: "none", width: `${box.frameWidth / box.canvasWidth * 100}%`, height: `${box.frameHeight / box.canvasHeight * 100}%`, left: `${box.offsetX / box.canvasWidth * 100}%`, top: `${box.offsetY / box.canvasHeight * 100}%` } : { width: "100%", height: "100%", objectFit: "contain" }}
             onLoadedMetadata={playerReady} onCanPlay={playerReady} onError={() => void fallback()}
@@ -111,7 +112,7 @@ export function TrimPlayer() {
     <div className="mb-2 flex flex-wrap items-center gap-2">
       <button className={button} disabled={!ready || busy || !!error} onClick={() => void play()} aria-label={playing ? "Pause" : "Play"}>{playing ? "Pause" : "Play"}</button>
       <button className={button} disabled={!ready || !valid || busy || !!error} onClick={() => void play(true)}>Play Selection</button>
-      <span className="ml-auto font-mono text-[11px] text-shift-muted">{formatTimestamp(time)} / {formatTimestamp(total)}</span>
+      <span className="ml-auto font-mono text-[11px] text-shift-muted">{formatMediaTime(time)} / {formatMediaTime(total)}</span>
     </div>
     <div className="mb-2 flex flex-wrap items-center gap-2">
       <span className="mr-1 text-[10px] tracking-[0.08em] text-shift-label">DURATION</span>
@@ -159,11 +160,11 @@ export function TrimPlayer() {
       <input className="trim-bound absolute inset-x-0 top-6 z-30 h-6 w-full" aria-label="OUT marker" type="range" min={0} max={total || 1} step={0.001} value={Math.min(end,total)} disabled={!total} onChange={(e) => resize("out",Number(e.target.value))} />
     </div>
     <div className="flex flex-wrap items-end gap-3">
-      <TimeField label="IN" value={s.clipIn} onChange={s.setClipIn} invalid={!!s.clipError} />
+      <TimeField label="IN" displayValue={formatMediaTime(start)} onChange={s.setClipIn} invalid={!!s.clipError} />
       <button className={button} disabled={!ready || busy || !!error} onClick={() => s.setClipIn(formatTimestamp(time))}>Set IN</button>
-      <TimeField label="OUT" value={s.clipOut} onChange={s.setClipOut} invalid={!!s.clipError} />
+      <TimeField label="OUT" displayValue={formatMediaTime(end)} onChange={s.setClipOut} invalid={!!s.clipError} />
       <button className={button} disabled={!ready || busy || !!error} onClick={() => s.setClipOut(formatTimestamp(time))}>Set OUT</button>
     </div>
-    <div className={`mt-2 text-[11px] ${s.clipError ? "text-shift-danger" : "text-shift-muted"}`} role="status">{s.clipError ?? playError ?? (s.clipLabel ? `${s.clipLabel} selected` : "Choose a range")}</div>
+    <div className={`mt-2 text-[11px] ${s.clipError ? "text-shift-danger" : "text-shift-muted"}`} role="status">{s.clipError ?? playError ?? (s.clipSeconds != null ? `${formatMediaTime(s.clipSeconds)} selected` : "Choose a range")}</div>
   </section>;
 }

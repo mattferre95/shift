@@ -19,7 +19,7 @@ const media: UrlMedia = {
   thumbnailPath: null, qualities: [{ id: "best", label: "Best" }], hasVideo: true,
   width: 640, height: 360,
 };
-const info = { path: "/preview.mp4", duration: 8, hasVideo: true, width: 640, height: 360, proxy: false };
+const info = { path: "/preview.mp4", duration: 8, hasVideo: true, hasAudio: true, width: 640, height: 360, proxy: false };
 
 beforeEach(() => {
   vi.mocked(ipc.createPlayback).mockReset().mockResolvedValue("session");

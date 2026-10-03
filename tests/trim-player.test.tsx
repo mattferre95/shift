@@ -7,7 +7,7 @@ vi.mock("@tauri-apps/api/core", () => ({convertFileSrc:(path:string)=>path}));
 let pause: ReturnType<typeof vi.fn>;
 let play: ReturnType<typeof vi.fn>;
 beforeEach(()=>{
- Object.assign(state,{duration:8,clipIn:"00:02.000",clipOut:"00:04.000",clipDurationPreset:15,clipError:null,clipLabel:"00:02.000",showAspect:false,aspectPreview:null,setClipDurationPreset:vi.fn(),setClipIn:vi.fn(),setClipOut:vi.fn(),resizeClipIn:vi.fn(),resizeClipOut:vi.fn(),moveClipRange:vi.fn(),playback:{info:{path:"/tone.mp3",duration:8,hasVideo:false,proxy:false},busy:false,error:null,status:"ready",cancel:vi.fn(),retry:vi.fn(),fallback:vi.fn(),markReady:vi.fn()}});
+ Object.assign(state,{duration:8,clipIn:"00:02.000",clipOut:"00:04.000",clipDurationPreset:15,clipError:null,clipLabel:"00:02.000",clipSeconds:2,soundEnabled:true,showAspect:false,aspectPreview:null,setClipDurationPreset:vi.fn(),setClipIn:vi.fn(),setClipOut:vi.fn(),resizeClipIn:vi.fn(),resizeClipOut:vi.fn(),moveClipRange:vi.fn(),playback:{info:{path:"/tone.mp3",duration:8,hasVideo:false,hasAudio:true,proxy:false},busy:false,error:null,status:"ready",cancel:vi.fn(),retry:vi.fn(),fallback:vi.fn(),markReady:vi.fn()}});
  pause=vi.fn(function(this:HTMLMediaElement){Object.defineProperty(this,"paused",{value:true,configurable:true});this.dispatchEvent(new Event("pause"));});
  play=vi.fn(function(this:HTMLMediaElement){Object.defineProperty(this,"paused",{value:false,configurable:true});this.dispatchEvent(new Event("play"));return Promise.resolve();});
  vi.spyOn(HTMLMediaElement.prototype,"pause").mockImplementation(pause);
@@ -46,7 +46,12 @@ test("invalid range cannot play selection; preview errors leave controls visible
 });
 test("new source clears player position and failure requests proxy fallback",()=>{
  const {video,rerender}=setup();video.currentTime=3;fireEvent.timeUpdate(video);fireEvent.error(video);expect(state.playback.fallback).toHaveBeenCalled();
- state.playback.info={...state.playback.info,path:"/other.mp3"};rerender(<TrimPlayer/>);expect(screen.getByText(/00:00.000 \/ 00:08.000/)).toBeTruthy();
+ state.playback.info={...state.playback.info,path:"/other.mp3"};rerender(<TrimPlayer/>);expect(screen.getByText(/00:00 \/ 00:08/)).toBeTruthy();
+});
+test("sound state mutes and unmutes the existing player immediately",()=>{
+ const {video,rerender}=setup();expect(video.muted).toBe(false);
+ state.soundEnabled=false;rerender(<TrimPlayer/>);expect(video.muted).toBe(true);
+ state.soundEnabled=true;rerender(<TrimPlayer/>);expect(video.muted).toBe(false);
 });
 test("space pauses only outside editing controls",async()=>{
  const {video}=setup();fireEvent.keyDown(screen.getByLabelText("Trim player"),{code:"Space"});await act(async()=>{});expect(play).toHaveBeenCalledTimes(1);

@@ -6,6 +6,7 @@ export interface PlaybackInfo {
   path: string;
   duration: number | null;
   hasVideo: boolean;
+  hasAudio: boolean;
   width: number | null;
   height: number | null;
   proxy: boolean;
