@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { BuildInfo } from "@/components/BuildInfo";
 import { TitleBar } from "@/components/TitleBar";
 import { DetectedState } from "@/features/input/DetectedState";
 import { EmptyState } from "@/features/input/EmptyState";
@@ -39,6 +40,7 @@ function Window() {
           <div className="pointer-events-none absolute inset-0 border-2 border-[oklch(0.72_0.15_155_/_0.45)] bg-[oklch(0.72_0.15_155_/_0.05)]" />
         )}
       </main>
+      <BuildInfo />
     </div>
   );
 }
