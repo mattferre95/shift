@@ -205,6 +205,29 @@ and it takes the loop preset too: a 9:16 crop of a 1280x720 clip is 404x720 as a
 video and 268x480 as a Standard GIF, and the label has to show the one the file
 will actually have.
 
+**An animated GIF is a video source, on its own clock.** A GIF demuxes as a
+silent video stream, so it takes the ffprobe path and is offered video and loop
+outputs only. Its frame delays are whole hundredths of a second, and passing
+those timestamps straight through looked right but failed three ways on a
+variable-delay fixture: x264's B-frames pushed DTS far negative across the long
+gaps and the MP4 muxer recorded 1.5s for a 2.17s animation, so a player stops
+early; the last frame of a variable-rate encode got `1/r_frame_rate` instead of
+its own delay, losing any final hold; and an input `-ss` discarded the frame
+still on screen at IN because it began earlier — invisible at 30 fps, glaring
+on a GIF that holds a frame for a second. Resampling to 100 fps is GIF's native
+grid, so it moves no frame, and it removes all three; the repeats cost almost
+nothing as H.264 skip blocks. A GIF is therefore trimmed in the filter graph
+(`fps=100,trim,setpts`) and never input-seeked, on the video and loop paths
+alike. The same clock and a black `-trans_color` go into the preview proxy, so
+the player cannot disagree with the export. The regression fixture is written
+byte for byte by the test itself, because FFmpeg's GIF muxer snapped the delays
+it was asked for onto its own grid.
+
+**An odd-sized source is cropped even, not scaled.** yuv420p subsamples chroma
+by two and libx264 refuses odd dimensions outright — a 201x151 GIF produced no
+file. Dropping the stray column or row resamples nothing and keeps pixels
+square.
+
 **Cancellation kills a process group, not a process.** yt-dlp spawns its own
 children. Each job owns one `CancelToken`; the child is spawned into its own
 process group and cancel sends `SIGTERM` to the whole group.

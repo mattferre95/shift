@@ -85,8 +85,14 @@ pub async fn analyze_file(path: String) -> Result<LocalMedia> {
             .unwrap_or_default();
         let cancel = CancelToken::new();
 
+        // A GIF is a picture only when it has a single frame. Anything more is a
+        // moving source and takes the ffprobe path below, where it is offered
+        // video and loop outputs — and, having no sound, nothing else.
+        let still_gif =
+            ext == "gif" && crate::media::ffprobe::frame_count(&resolved, &cancel)? <= 1;
+
         // Images take the sips path; audio and video keep the ffprobe one.
-        if image::is_image_ext(&ext) {
+        if image::is_image_ext(&ext) || still_gif {
             let info = image::probe(&resolved, &cancel)?;
             return Ok(LocalMedia {
                 kind: "image",
@@ -110,7 +116,8 @@ pub async fn analyze_file(path: String) -> Result<LocalMedia> {
             });
         }
 
-        if !VIDEO_EXTS.contains(&ext.as_str()) && !AUDIO_EXTS.contains(&ext.as_str()) {
+        if ext != "gif" && !VIDEO_EXTS.contains(&ext.as_str()) && !AUDIO_EXTS.contains(&ext.as_str())
+        {
             return Err(ShiftError::unsupported_file());
         }
 

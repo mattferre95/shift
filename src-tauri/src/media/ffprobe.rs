@@ -31,6 +31,38 @@ impl MediaProbe {
     pub fn has_video(&self) -> bool {
         self.video.is_some()
     }
+
+    /// An animated GIF: a video stream coded as GIF, and never any sound.
+    pub fn is_gif(&self) -> bool {
+        self.video.as_ref().is_some_and(|v| v.codec == "gif")
+    }
+}
+
+/// How many frames a file holds, counted from packets rather than decoded.
+///
+/// This is what tells an animated GIF from a still one — about 20ms, and not a
+/// pixel decoded to answer it. One frame is a picture and takes the still-image
+/// path; more than one is a moving source.
+pub fn frame_count(path: &Path, cancel: &CancelToken) -> Result<u64> {
+    let args: Vec<String> = vec![
+        "-v".into(),
+        "error".into(),
+        "-count_packets".into(),
+        "-select_streams".into(),
+        "v:0".into(),
+        "-show_entries".into(),
+        "stream=nb_read_packets".into(),
+        "-of".into(),
+        "csv=p=0".into(),
+        path.to_string_lossy().to_string(),
+    ];
+    let out = run_capture(Binary::Ffprobe, &args, cancel)?;
+    if !out.success {
+        return Err(ShiftError::probe_failed(out.log()));
+    }
+    out.stdout.trim().parse::<u64>().map_err(|_| {
+        ShiftError::probe_failed(format!("no frame count in: {}", out.stdout.trim()))
+    })
 }
 
 #[derive(Deserialize)]

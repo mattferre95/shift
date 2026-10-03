@@ -136,17 +136,26 @@ pub fn image_options(has_alpha: bool) -> Vec<OutputFormat> {
 /// Which output chips make sense for a probed local file (LOC-03/04/05).
 pub fn options_for(probe: &MediaProbe) -> Vec<OutputFormat> {
     if probe.has_video() {
-        vec![
+        let mut out = vec![
             OutputFormat::Mp4,
             OutputFormat::Mov,
             OutputFormat::Webm,
             OutputFormat::Gif,
             OutputFormat::Webp,
-            OutputFormat::Mp3,
-            OutputFormat::M4a,
-            OutputFormat::Wav,
-            OutputFormat::Flac,
-        ]
+        ];
+        // A silent source — an animated GIF, or a recording with no track — has
+        // nothing to extract, so it is offered nothing to extract it into.
+        // `build_plan` already refuses the request; this stops the chip being
+        // offered in the first place.
+        if probe.audio.is_some() {
+            out.extend([
+                OutputFormat::Mp3,
+                OutputFormat::M4a,
+                OutputFormat::Wav,
+                OutputFormat::Flac,
+            ]);
+        }
+        out
     } else {
         vec![
             OutputFormat::Mp3,
@@ -241,6 +250,76 @@ impl LoopSize {
 
 pub fn loop_options() -> Vec<LoopSize> {
     vec![LoopSize::Small, LoopSize::Standard, LoopSize::Large]
+}
+
+// ------------------------------------------------------------- GIF sources
+
+/// GIF's own clock.
+///
+/// Every frame delay in a GIF is a whole number of hundredths of a second, so
+/// resampling to 100 fps moves no frame at all: it only writes out, as repeated
+/// frames, the holds the GIF expressed as delays. Measured on a variable-delay
+/// fixture with the bundled FFmpeg, passing the GIF's timestamps straight
+/// through instead fails three separate ways:
+///
+/// - x264's B-frames push DTS far negative across the long gaps, and the MP4
+///   muxer then records a container duration that is simply wrong — 1.5s for a
+///   2.17s animation — so a player stops early.
+/// - The last frame of a variable-rate encode is given `1/r_frame_rate` rather
+///   than its own delay, so a GIF that pauses on its final frame loses the
+///   pause.
+/// - A trim cuts on frame *start* times, so the frame still on screen at IN is
+///   discarded because it began earlier. At 30 fps nobody notices; a GIF that
+///   holds a frame for a second visibly starts late.
+///
+/// On the 100 fps grid all three disappear, and the repeats cost almost
+/// nothing: H.264 codes an unchanged frame as skip blocks.
+pub const GIF_TICKS_PER_SECOND: u32 = 100;
+
+/// Decoder options for a GIF source, which must precede `-i`.
+///
+/// GIF transparency is one bit, and the decoder paints transparent pixels white
+/// by default, so an opaque output shows white wherever the animation was
+/// see-through. Asking for black — alpha still zero — gives MP4, MOV and WEBM
+/// SHIFT's usual black ground, while GIF and animated WebP outputs, which read
+/// the alpha, stay transparent exactly as before.
+pub fn gif_decode_options() -> Vec<String> {
+    vec!["-trans_color".into(), "0".into()]
+}
+
+fn gif_input_options(probe: &MediaProbe) -> Vec<String> {
+    if probe.is_gif() {
+        gif_decode_options()
+    } else {
+        Vec::new()
+    }
+}
+
+/// The timing stage of a GIF's chain: onto its own clock, then trimmed there
+/// rather than by an input seek (see `GIF_TICKS_PER_SECOND`).
+fn gif_timing(clip: Option<ClipRange>) -> Vec<String> {
+    let mut f = vec![format!("fps={GIF_TICKS_PER_SECOND}")];
+    if let Some(range) = clip {
+        f.push(format!(
+            "trim=start={:.3}:duration={:.3}",
+            range.start,
+            range.duration()
+        ));
+        f.push("setpts=PTS-STARTPTS".into());
+    }
+    f
+}
+
+/// yuv420p subsamples chroma by two, and libx264 refuses an odd width or height
+/// outright — a 201x151 GIF produced no file at all. Cropping the stray column
+/// or row resamples nothing and keeps the pixels square; a scale would do
+/// neither.
+fn even_crop(size: (u32, u32)) -> Option<String> {
+    let (w, h) = size;
+    if w < 2 || h < 2 || (w % 2 == 0 && h % 2 == 0) {
+        return None;
+    }
+    Some(format!("crop={}:{}:0:0", w - w % 2, h - h % 2))
 }
 
 /// The source's pixel dimensions, or `(0, 0)` when ffprobe could not report
@@ -389,16 +468,20 @@ pub fn build_plan_with_audio(
     }
 
     let mut args: Vec<String> = vec!["-hide_banner".into(), "-nostdin".into(), "-y".into()];
+    let gif = probe.is_gif();
+    args.extend(gif_input_options(probe));
 
     // Input-side seek. Since FFmpeg 2.1 this is frame-accurate when re-encoding
-    // and still fast, because the decoder skips ahead before decoding.
-    if let Some(range) = clip {
+    // and still fast, because the decoder skips ahead before decoding. Never for
+    // a GIF, which is trimmed on its own clock in the filter chain instead.
+    let input_seek = clip.filter(|_| !gif);
+    if let Some(range) = input_seek {
         args.push("-ss".into());
         args.push(format!("{:.3}", range.start));
     }
     args.push("-i".into());
     args.push(input.to_string_lossy().to_string());
-    if let Some(range) = clip {
+    if let Some(range) = input_seek {
         args.push("-t".into());
         args.push(format!("{:.3}", range.duration()));
     }
@@ -440,12 +523,20 @@ pub fn build_plan_with_audio(
             }
             remuxed = true;
         } else {
-            if let Some(chain) = reframe
-                .map(|r| r.filters().join(","))
-                .filter(|c| !c.is_empty())
-            {
+            // Shape first — a reframe, or only the even crop yuv420p demands —
+            // then, for a GIF, its clock. The shape runs once per source frame,
+            // before `fps` repeats anything.
+            let mut filters: Vec<String> = match reframe {
+                Some(r) => r.filters(),
+                None => even_crop(source_size(probe)).into_iter().collect(),
+            };
+            if gif {
+                filters.push("setsar=1".into());
+                filters.extend(gif_timing(clip));
+            }
+            if !filters.is_empty() {
                 args.push("-vf".into());
-                args.push(chain);
+                args.push(filters.join(","));
             }
             args.extend(video_encoder(format));
             if !sound_enabled {
@@ -517,13 +608,16 @@ fn build_loop_plan(
     }
 
     let mut args: Vec<String> = vec!["-hide_banner".into(), "-nostdin".into(), "-y".into()];
-    if let Some(range) = clip {
+    let gif = probe.is_gif();
+    args.extend(gif_input_options(probe));
+    let input_seek = clip.filter(|_| !gif);
+    if let Some(range) = input_seek {
         args.push("-ss".into());
         args.push(format!("{:.3}", range.start));
     }
     args.push("-i".into());
     args.push(input.to_string_lossy().to_string());
-    if let Some(range) = clip {
+    if let Some(range) = input_seek {
         args.push("-t".into());
         args.push(format!("{:.3}", range.duration()));
     }
@@ -556,6 +650,15 @@ fn build_loop_plan(
             loop_size.fps(),
             loop_size.longest_edge()
         )
+    };
+
+    // A trimmed GIF is cut on its own clock first, so the frame on screen at IN
+    // survives, and the preset's rate is applied to what remains. Untrimmed, the
+    // preset's `fps` already honours every delay, final hold included.
+    let chain = if gif && clip.is_some() {
+        format!("{},{chain}", gif_timing(clip).join(","))
+    } else {
+        chain
     };
 
     match format {
@@ -1172,13 +1275,24 @@ mod tests {
 
 /// Preview encodes are deliberately independent from export profiles.
 pub fn playback_plan(input: &Path, probe: &MediaProbe, output: &Path) -> EncodePlan {
-    let mut args: Vec<String> = ["-hide_banner", "-nostdin", "-y", "-i"]
+    let mut args: Vec<String> = ["-hide_banner", "-nostdin", "-y"]
         .into_iter()
         .map(String::from)
         .collect();
+    // A GIF proxy gets the same transparency and clock as its export. Without
+    // them the player shows white where the file will be black, and — because
+    // of the B-frame duration bug described at `GIF_TICKS_PER_SECOND` — can
+    // believe the media ends early.
+    args.extend(gif_input_options(probe));
+    args.push("-i".into());
     args.push(input.to_string_lossy().into_owned());
     if probe.has_video() {
-        args.extend(["-map", "0:V:0", "-map", "0:a:0?", "-vf", "scale=w='min(iw,960)':h='min(ih,540)':force_original_aspect_ratio=decrease:force_divisible_by=2,setsar=1", "-c:v", "libx264", "-preset", "veryfast", "-crf", "25", "-pix_fmt", "yuv420p"].into_iter().map(String::from));
+        let mut vf = String::from("scale=w='min(iw,960)':h='min(ih,540)':force_original_aspect_ratio=decrease:force_divisible_by=2,setsar=1");
+        if probe.is_gif() {
+            vf.push_str(&format!(",fps={GIF_TICKS_PER_SECOND}"));
+        }
+        args.extend(["-map".into(), "0:V:0".into(), "-map".into(), "0:a:0?".into(), "-vf".into(), vf]);
+        args.extend(["-c:v", "libx264", "-preset", "veryfast", "-crf", "25", "-pix_fmt", "yuv420p"].into_iter().map(String::from));
     } else {
         args.extend(["-vn", "-map", "0:a:0"].into_iter().map(String::from));
     }
@@ -1203,5 +1317,76 @@ pub fn playback_plan(input: &Path, probe: &MediaProbe, output: &Path) -> EncodeP
     EncodePlan {
         args,
         remuxed: false,
+    }
+}
+
+#[cfg(test)]
+mod gif_tests {
+    use super::*;
+    use crate::media::ffprobe::StreamInfo;
+
+    fn gif_probe() -> MediaProbe {
+        MediaProbe {
+            duration: Some(2.17),
+            container: "gif".into(),
+            size_bytes: 1,
+            video: Some(StreamInfo { codec: "gif".into(), width: Some(161), height: Some(121) }),
+            audio: None,
+        }
+    }
+
+    fn args(format: OutputFormat, clip: Option<ClipRange>) -> Vec<String> {
+        build_plan(
+            Path::new("/in.gif"),
+            &gif_probe(),
+            format,
+            clip,
+            LoopSize::default(),
+            &AspectSpec::default(),
+            Path::new("/out"),
+        )
+        .unwrap()
+        .args
+    }
+
+    #[test]
+    fn a_silent_source_is_offered_no_audio_outputs() {
+        assert_eq!(
+            options_for(&gif_probe()),
+            vec![
+                OutputFormat::Mp4,
+                OutputFormat::Mov,
+                OutputFormat::Webm,
+                OutputFormat::Gif,
+                OutputFormat::Webp,
+            ]
+        );
+    }
+
+    #[test]
+    fn a_gif_is_trimmed_on_its_own_clock_and_never_input_seeked() {
+        // An input seek drops the frame still on screen at IN; see
+        // `GIF_TICKS_PER_SECOND`.
+        let clip = ClipRange { start: 0.35, end: 1.35 };
+        for format in [OutputFormat::Mp4, OutputFormat::Gif, OutputFormat::Webp] {
+            let a = args(format, Some(clip));
+            let input = a.iter().position(|x| x == "-i").unwrap();
+            let tc = a.iter().position(|x| x == "-trans_color").expect("decoder option");
+            assert!(tc < input, "{format:?}: decoder options must precede -i");
+            assert!(!a[..input].iter().any(|x| x == "-ss"), "{format:?}: input-seeked");
+            let graph = a.iter().find(|x| x.contains("trim=")).expect("a trim in the graph");
+            assert!(
+                graph.contains("fps=100,trim=start=0.350:duration=1.000,setpts=PTS-STARTPTS"),
+                "{format:?}: {graph}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_odd_sized_source_is_cropped_even_rather_than_scaled() {
+        let a = args(OutputFormat::Mp4, None);
+        let vf = &a[a.iter().position(|x| x == "-vf").unwrap() + 1];
+        assert!(vf.starts_with("crop=160:120:0:0,setsar=1,fps=100"), "{vf}");
+        assert!(!vf.contains("scale="), "{vf}");
     }
 }

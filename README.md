@@ -52,6 +52,8 @@ converters to navigate.
 
 ### Loops
 
+- Import animated **GIF** sources and preserve their frame timing and transparency
+- Convert animated GIFs to **MP4 · MOV · WEBM · GIF · animated WEBP**
 - Turn any clip into a **GIF** or an **animated WEBP**
 - Three sizes — Small, Standard, Large — that set width and frame rate together
 - Frame rates chosen so GIF's centisecond timing comes out exactly even, with no
@@ -63,7 +65,7 @@ converters to navigate.
 
 ### Images
 
-- Read **HEIC · HEIF · JPG · JPEG · PNG · WEBP · AVIF**
+- Read **HEIC · HEIF · JPG · JPEG · PNG · WEBP · AVIF**, plus single-frame **GIF**
 - Export **JPG · PNG · WEBP · AVIF**
 - Quality presets for the lossy formats — None, Light, Balanced, Strong
 - Lossless optimization for PNG, which never touches a pixel

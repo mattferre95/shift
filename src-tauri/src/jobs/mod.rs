@@ -574,7 +574,7 @@ fn execute(
     // still and an animation, so asking the format alone would send a video
     // headed for animated WebP into the image pipeline.
     if let InputSpec::Local { path } = &request.input {
-        if image_input(path) {
+        if image_input(path, cancel) {
             return execute_image(
                 app,
                 job_id,
@@ -755,12 +755,22 @@ fn execute(
     Ok(())
 }
 
-/// True when the path looks like one of the V1.1 image inputs.
-fn image_input(path: &str) -> bool {
-    PathBuf::from(path)
+/// True when the input takes the still-image pipeline.
+///
+/// A GIF is the one extension that can go either way: a single frame is a
+/// picture, anything more is a moving source. `analyze_file` makes the same
+/// call from the same count, so the pipeline that runs is the one the UI
+/// offered outputs for.
+fn image_input(path: &str, cancel: &CancelToken) -> bool {
+    let p = PathBuf::from(path);
+    let ext = p
         .extension()
-        .map(|e| image::is_image_ext(&e.to_string_lossy()))
-        .unwrap_or(false)
+        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    if image::is_image_ext(&ext) {
+        return true;
+    }
+    ext == "gif" && matches!(ffprobe::frame_count(&p, cancel), Ok(n) if n <= 1)
 }
 
 /// The image pipeline: Analyze → Convert → (Compress) → Finalize.

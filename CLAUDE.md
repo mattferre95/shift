@@ -37,6 +37,12 @@ Sidecars are not committed. `npm run sidecars` is required before the first buil
 - **Loop length limits are per format** — GIF 15s, animated WEBP 30s — because
   GIF has no interframe compression. They live in `profiles` and are mirrored in
   `types/index.ts`; change both together.
+- **An animated GIF is a video source on its own clock.** Every GIF delay is a
+  whole centisecond, so video exports and the preview proxy resample to
+  `fps=100` — exact, not arbitrary — and a GIF is trimmed in the filter graph,
+  never by an input `-ss`, which drops the frame on screen at IN. Transparent
+  pixels decode black (`-trans_color 0`). One frame is a still and takes the
+  image path; `ffprobe::frame_count` decides, in both `analyze_file` and `jobs`.
 - **An audio stream is only copied when the result means the same thing.**
   See `audio_copy_is_faithful`. Legal-in-container is not the test.
 - **Shape lives in `media::aspect` and nowhere else.** Ratios, Fill/Fit and
@@ -85,7 +91,8 @@ by ratio or exact size, cropping or padding but never stretching; and image
 conversion from
 HEIC/HEIF/JPG/PNG/WEBP/AVIF to JPG/PNG/WEBP/AVIF with optional compression.
 Reads more containers than it writes — MKV, M4V, AVI, AIFF, OGG and Opus
-included. Every export is named and placed through the native Save panel.
+included — and takes an animated GIF as a moving source, exportable to
+MP4/MOV/WEBM/GIF/WEBP with trim and aspect; a single-frame GIF is a still. Every export is named and placed through the native Save panel.
 
 Still out: batch, presets, history, accounts, analytics, cloud. Ideas for later
 go in the future-work section of `docs/ARCHITECTURE.md`, not into the app.

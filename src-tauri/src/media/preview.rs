@@ -157,6 +157,11 @@ fn still(input: &Path, out: &Path, cancel: &CancelToken) -> Result<PathBuf> {
 /// the preview's own pixels square so the UI is not measuring a stretched image.
 fn frame(input: &Path, at: f64, out: &Path, cancel: &CancelToken) -> Result<PathBuf> {
     let mut args: Vec<String> = vec!["-hide_banner".into(), "-nostdin".into(), "-y".into()];
+    // A GIF's transparent pixels decode white by default; the export paints them
+    // black, so the framing preview does too.
+    if input.extension().is_some_and(|e| e.eq_ignore_ascii_case("gif")) {
+        args.extend(crate::media::profiles::gif_decode_options());
+    }
     if at > 0.0 {
         args.push("-ss".into());
         args.push(format!("{at:.3}"));

@@ -89,6 +89,12 @@ from published sample/CC-BY sources.
 | 45 | Video preview shows a real extracted frame at the IN point | ✅ |
 | 46 | GIF preview reports the loop-capped size | ✅ 268 × 480 |
 | 47 | Deepest state (GIF + LOOP + ASPECT + PREVIEW + trim) fits 980×680 | ✅ no scrollbar |
+| 48 | Animated GIF opens as a moving source: OUTPUT is MP4 MOV WEBM · GIF WEBP, no audio chips, no Extract audio | ✅ real 148-frame, 21.14s GIF |
+| 49 | GIF preview plays, pauses, scrubs, and shows the true total | ✅ `00:21.140`, proxy labelled preview copy |
+| 50 | Set IN / Set OUT / Play Selection on a GIF, which stops at OUT | ✅ 05.642 → 11.391, stopped at 11.391 |
+| 51 | Trimmed GIF → MP4: H.264 yuv420p, SAR 1:1, no audio, duration = selection, correct speed | ✅ 5.750s for 5.749s; every checkpoint the right source frame |
+| 52 | GIF → animated WEBP: whole animation at the correct speed | ✅ ends 21.12s of 21.14s; all 147 frames on their 12.5 fps slot |
+| 53 | GIF preview proxy deleted on New shift | ✅ no playback dirs left |
 
 ## Also verified
 

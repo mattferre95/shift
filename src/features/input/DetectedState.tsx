@@ -279,7 +279,7 @@ function Modifiers() {
         <Section title="TRANSFORM">
           <div className="flex flex-wrap gap-2">
             <Chip label="Trim" selected={s.clipEnabled} onClick={s.toggleClip} />
-            {local?.hasVideo && (
+            {local?.hasVideo && s.outputs.some(isAudioFormat) && (
               <Chip
                 label="Extract audio"
                 selected={s.extractAudio}

@@ -383,7 +383,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
           extensions: [
             "mp4", "mov", "webm", "mkv", "m4v", "avi",
             "mp3", "wav", "m4a", "aac", "flac", "aiff", "aif", "ogg", "opus",
-            "heic", "heif", "jpg", "jpeg", "png", "webp", "avif",
+            "heic", "heif", "jpg", "jpeg", "png", "webp", "avif", "gif",
           ],
         },
       ],
