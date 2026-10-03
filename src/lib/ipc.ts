@@ -13,6 +13,8 @@ import type {
   JobEvent,
   LocalMedia,
   SavePrompt,
+  PostDownloadResult,
+  PostMedia,
   UrlMedia,
 } from "@/types";
 
@@ -36,6 +38,10 @@ export interface PlaybackEvent {
 }
 
 export const analyzeUrl = (url: string) => invoke<UrlMedia>("analyze_url", { url });
+export const downloadPostItems = (items: PostMedia[], destinationDir: string, jobId: string) =>
+  invoke<PostDownloadResult>("download_post_items", {
+    request: { items, destinationDir, jobId },
+  });
 
 export const analyzeFile = (path: string) => invoke<LocalMedia>("analyze_file", { path });
 
@@ -108,11 +114,11 @@ export function toShiftError(e: unknown): import("@/types").ShiftError {
   return { code: "unknown", message: "Something went wrong.", hint: null, technical };
 }
 
-export const createPlayback = (input: ExportRequest["input"], knownMedia: UrlMedia | null = null) =>
+export const createPlayback = (input: ExportRequest["input"], knownMedia: PostMedia | null = null) =>
   invoke<string>("create_playback", { input, knownMedia });
 export const preparePlayback = (id: string, forceProxy: boolean) => invoke<import("@/state/playback").PlaybackInfo>("prepare_playback", { id, forceProxy });
 export const releasePlayback = (id: string) => invoke<void>("release_playback", { id });
-export const releaseUrlMedia = (thumbnailPath: string | null) =>
-  invoke<void>("release_url_media", { thumbnailPath });
+export const releaseUrlMedia = (thumbnailPaths: string[]) =>
+  invoke<void>("release_url_media", { thumbnailPaths });
 export const onPlaybackEvent = (handler: (event: PlaybackEvent) => void): Promise<UnlistenFn> =>
   listen<PlaybackEvent>(PLAYBACK_EVENT, (e) => handler(e.payload));

@@ -33,6 +33,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::analyze_url,
+            commands::download_post_items,
             commands::analyze_file,
             commands::validate_clip,
             commands::aspect_preview,

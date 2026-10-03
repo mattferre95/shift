@@ -3175,6 +3175,7 @@ dependencies = [
 name = "shift"
 version = "1.0.0"
 dependencies = [
+ "base64 0.22.1",
  "dirs",
  "libc",
  "rand",

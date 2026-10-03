@@ -52,6 +52,7 @@ import {
   type JobOutput,
   type LocalMedia,
   type OutputFormat,
+  type PostMedia,
   type ShiftError,
   type UrlMedia,
 } from "@/types";
@@ -82,6 +83,8 @@ interface ShiftState {
   analyzing: boolean;
   dragging: boolean;
   urlMedia: UrlMedia | null;
+  activeMediaIndex: number;
+  selectedMediaIds: string[];
   localMedia: LocalMedia | null;
   format: OutputFormat;
   quality: string;
@@ -113,6 +116,8 @@ interface ShiftState {
 
 interface ShiftApi extends ShiftState {
   playback: ReturnType<typeof usePlayback>;
+  activeMedia: PostMedia | null;
+  selectedMediaCount: number;
   outputs: OutputFormat[];
   showQuality: boolean;
   duration: number | null;
@@ -158,6 +163,10 @@ interface ShiftApi extends ShiftState {
   setFormat: (f: OutputFormat) => void;
   setQuality: (q: string) => void;
   toggleSound: () => void;
+  selectPostMedia: (index: number) => void;
+  togglePostMedia: (id: string) => void;
+  selectAllPostMedia: () => void;
+  clearPostMedia: () => void;
   toggleClip: () => void;
   setClipDurationPreset: (preset: TrimDurationPreset) => void;
   setClipIn: (v: string) => void;
@@ -177,6 +186,8 @@ const initial: ShiftState = {
   analyzing: false,
   dragging: false,
   urlMedia: null,
+  activeMediaIndex: 0,
+  selectedMediaIds: [],
   localMedia: null,
   format: "MP4",
   quality: "best",
@@ -298,16 +309,21 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
       ipc
         .analyzeUrl(value)
         .then((media) => {
-          const defaultOut: OutputFormat = media.hasVideo ? "MP4" : "MP3";
-          const trim = defaultTrimRange(media.duration);
+          const first = media.mediaItems[0];
+          if (!first) throw new Error("No downloadable media was found.");
+          const defaultOut: OutputFormat =
+            first.type === "image" ? "JPG" : first.type === "video" ? "MP4" : "MP3";
+          const trim = defaultTrimRange(first.duration);
           set((prev) => ({
             ...prev,
             screen: "url",
             analyzing: false,
             urlMedia: media,
+            activeMediaIndex: 0,
+            selectedMediaIds: media.mediaItems.map((item) => item.id),
             localMedia: null,
             format: defaultOut,
-            quality: media.qualities[0]?.id ?? "best",
+            quality: first.qualities[0]?.id ?? "best",
             soundEnabled: true,
             clipEnabled: false,
             clipIn: formatTimestamp(trim.start),
@@ -343,6 +359,8 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
             analyzing: false,
             localMedia: media,
             urlMedia: null,
+            activeMediaIndex: 0,
+            selectedMediaIds: [],
             format: media.outputs.includes(defaultOut) ? defaultOut : media.outputs[0],
             compression: "none",
             soundEnabled: true,
@@ -394,33 +412,43 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
 
   // ---- derived ------------------------------------------------------------
   const outputs = useMemo<OutputFormat[]>(() => {
-    if (s.screen === "url") return URL_OUTPUTS;
+    if (s.screen === "url") {
+      const kind = s.urlMedia?.mediaItems[s.activeMediaIndex]?.type;
+      if (kind === "image") return ["JPG", "PNG", "WEBP", "AVIF"];
+      if (kind === "audio") return ["MP3", "M4A", "WAV"];
+      return URL_OUTPUTS;
+    }
     return s.localMedia?.outputs ?? [];
-  }, [s.screen, s.localMedia]);
+  }, [s.screen, s.localMedia, s.urlMedia, s.activeMediaIndex]);
 
-  const playbackInput = s.urlMedia
-    ? { kind: "url" as const, url: s.urlMedia.url, quality: s.quality }
+  const activeMedia = s.urlMedia?.mediaItems[s.activeMediaIndex] ?? null;
+  const playbackInput = activeMedia && activeMedia.type !== "image"
+    ? { kind: "url" as const, url: activeMedia.source, quality: s.quality }
     : s.localMedia && s.localMedia.kind !== "image"
       ? { kind: "local" as const, path: s.localMedia.path }
       : null;
   // Remote preparation begins as soon as URL detection succeeds. Local media
   // remains lazy because it is already immediately available from disk.
-  const playback = usePlayback(playbackInput, !!s.urlMedia || s.clipEnabled, s.urlMedia);
-  const duration = playback.info?.duration ?? s.urlMedia?.duration ?? s.localMedia?.duration ?? null;
+  const playback = usePlayback(
+    playbackInput,
+    (!!activeMedia && activeMedia.type !== "image") || s.clipEnabled,
+    activeMedia,
+  );
+  const duration = playback.info?.duration ?? activeMedia?.duration ?? s.localMedia?.duration ?? null;
 
   // Source-quality selection is real for a remote video, where yt-dlp actually
   // has separate renditions to choose between. A local file has exactly one,
   // so offering it there would mean downscaling — a post-V1 Resize action.
   const showQuality =
-    s.screen === "url" && !isAudioFormat(s.format) && (s.urlMedia?.qualities.length ?? 0) > 1;
+    s.screen === "url" && !isAudioFormat(s.format) && (activeMedia?.qualities.length ?? 0) > 1;
 
   const extractAudio = s.screen === "local" && !!s.localMedia?.hasVideo && isAudioFormat(s.format);
-  const isImage = s.localMedia?.kind === "image";
+  const isImage = s.localMedia?.kind === "image" || activeMedia?.type === "image";
   const compressionChoices = compressionOptions(s.format);
 
   // WEBP is a still from a photo and an animation from a video, so the source
   // has to answer this, never the format alone.
-  const sourceMoves = s.urlMedia?.hasVideo ?? s.localMedia?.hasVideo ?? false;
+  const sourceMoves = activeMedia?.type === "video" || (s.localMedia?.hasVideo ?? false);
   const isLoop = isAnimationFormat(s.format) && sourceMoves && !isImage;
   // Sound has no shape. ASPECT appears only when the thing being produced is
   // something you can look at.
@@ -438,8 +466,8 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
   // gave us, which still goes through the asset protocol.
   const previewImage =
     s.previewSource ??
-    (s.urlMedia?.thumbnailPath ? convertFileSrc(s.urlMedia.thumbnailPath) : null);
-  const previewIsApproximate = !s.previewSource && !!s.urlMedia?.thumbnailPath;
+    (activeMedia?.thumbnailPath ? convertFileSrc(activeMedia.thumbnailPath) : null);
+  const previewIsApproximate = !s.previewSource && !!activeMedia?.thumbnailPath && activeMedia.type !== "image";
   // A custom size has to be a real size before Export means anything. The
   // native layer refuses the same values; this only stops the user reaching the
   // Save panel first.
@@ -464,8 +492,8 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
   // Pure arithmetic in the native layer: no process is spawned, so this is
   // cheap enough to run on every keystroke and keeps one implementation of the
   // geometry rather than a second one over here that could drift.
-  const sourceW = playback.info?.width ?? s.localMedia?.width ?? s.urlMedia?.width ?? null;
-  const sourceH = playback.info?.height ?? s.localMedia?.height ?? s.urlMedia?.height ?? null;
+  const sourceW = playback.info?.width ?? s.localMedia?.width ?? activeMedia?.width ?? null;
+  const sourceH = playback.info?.height ?? s.localMedia?.height ?? activeMedia?.height ?? null;
   useEffect(() => {
     if (!sourceW || !sourceH || s.aspect.ratio === "original") {
       patch({ aspectPreview: null });
@@ -566,7 +594,8 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
     (s.screen === "url" || s.screen === "local") &&
     (!s.clipEnabled || (!s.clipError && validatedClip === clipKey)) &&
     !loopTooLong &&
-    !aspectInvalid;
+    !aspectInvalid &&
+    (!s.urlMedia || s.urlMedia.mediaItems.length === 1 || s.selectedMediaIds.length > 0);
 
   // ---- actions ------------------------------------------------------------
   /**
@@ -575,8 +604,66 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
    */
   const startExport = useCallback(async () => {
     if (!canExport || saving) return;
-    const input: ExportRequest["input"] | null = s.urlMedia
-      ? { kind: "url", url: s.urlMedia.url, quality: s.quality }
+    const selectedItems = s.urlMedia?.mediaItems.filter((item) =>
+      s.selectedMediaIds.includes(item.id),
+    ) ?? [];
+    if (s.urlMedia && s.urlMedia.mediaItems.length > 1) {
+      setSaving(true);
+      try {
+        const { open } = await import("@tauri-apps/plugin-dialog");
+        const chosen = await open({
+          multiple: false,
+          directory: true,
+          defaultPath: s.outputDir || undefined,
+        });
+        if (typeof chosen !== "string" || chosen.length === 0) return;
+        const id = crypto.randomUUID();
+        jobRef.current = id;
+        patch({
+          screen: "processing",
+          error: null,
+          output: null,
+          job: {
+            id,
+            state: "downloading",
+            stageLabel: `Downloading ${selectedItems.length} media items…`,
+            stageIndex: 0,
+            stageCount: 1,
+            progress: null,
+            filename: "",
+          },
+        });
+        const result = await ipc.downloadPostItems(selectedItems, chosen, id);
+        jobRef.current = null;
+        const saved = await ipc.setOutputDir(chosen).catch(() => chosen);
+        patch({
+          screen: "complete",
+          outputDir: saved,
+          output: {
+            path: chosen,
+            filename: `${result.paths.length} media items`,
+            sizeBytes: result.sizeBytes,
+            remuxed: true,
+            sourceBytes: null,
+            directory: result.directory,
+          },
+        });
+      } catch (e) {
+        jobRef.current = null;
+        const error = ipc.toShiftError(e);
+        if (error.code === "cancelled") {
+          patch({ screen: "url", job: null });
+        } else {
+          patch({ screen: "error", error });
+        }
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
+    const item = selectedItems[0] ?? activeMedia;
+    const input: ExportRequest["input"] | null = item
+      ? { kind: "url", url: item.source, quality: s.quality }
       : s.localMedia
         ? { kind: "local", path: s.localMedia.path }
         : null;
@@ -598,7 +685,11 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
     try {
       // The backend owns the naming rules, so the panel is prefilled from it
       // rather than from a second copy of them over here.
-      const sourceTitle = s.urlMedia?.title ?? s.localMedia?.name ?? "";
+      const sourceTitle =
+        item?.filenameHint?.replace(/\.[^.]+$/, "") ??
+        s.urlMedia?.title ??
+        s.localMedia?.name ??
+        "";
       const prompt = await ipc.savePrompt(request, sourceTitle);
 
       const { save } = await import("@tauri-apps/plugin-dialog");
@@ -625,7 +716,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
     } finally {
       setSaving(false);
     }
-  }, [canExport, saving, s.urlMedia, s.localMedia, s.quality, s.format, s.soundEnabled, s.clipEnabled, s.clipIn, s.clipOut, s.outputDir, s.compression, s.loopSize, s.aspect, isImage, isLoop, showAspect, patch]);
+  }, [canExport, saving, s.urlMedia, s.selectedMediaIds, activeMedia, s.localMedia, s.quality, s.format, s.soundEnabled, s.clipEnabled, s.clipIn, s.clipOut, s.outputDir, s.compression, s.loopSize, s.aspect, isImage, isLoop, showAspect, patch]);
 
   const cancel = useCallback(() => {
     const id = s.job?.id ?? jobRef.current;
@@ -633,7 +724,9 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
   }, [s.job]);
 
   const reset = useCallback(() => {
-    void ipc.releaseUrlMedia(s.urlMedia?.thumbnailPath ?? null);
+    void ipc.releaseUrlMedia(
+      s.urlMedia?.mediaItems.flatMap((item) => item.thumbnailPath ? [item.thumbnailPath] : []) ?? [],
+    );
     jobRef.current = null;
     lastInput.current = null;
     set((prev) => ({
@@ -642,7 +735,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
       health: prev.health,
       healthError: prev.healthError,
     }));
-  }, [s.urlMedia?.thumbnailPath]);
+  }, [s.urlMedia]);
 
   const retry = useCallback(() => {
     const last = lastInput.current;
@@ -658,6 +751,8 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
   const api: ShiftApi = {
     ...s,
     outputs,
+    activeMedia,
+    selectedMediaCount: s.selectedMediaIds.length,
     showQuality,
     duration,
     canExport,
@@ -754,6 +849,39 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
     setLoopSize: (l) => patch({ loopSize: l }),
     setQuality: (q) => patch({ quality: q }),
     toggleSound: () => set((prev) => ({ ...prev, soundEnabled: !prev.soundEnabled })),
+    selectPostMedia: (index) =>
+      set((prev) => {
+        const item = prev.urlMedia?.mediaItems[index];
+        if (!item) return prev;
+        const nextFormat: OutputFormat =
+          item.type === "image" ? "JPG" : item.type === "video" ? "MP4" : "MP3";
+        const trim = defaultTrimRange(item.duration);
+        return {
+          ...prev,
+          activeMediaIndex: index,
+          format: nextFormat,
+          quality: item.qualities[0]?.id ?? "best",
+          soundEnabled: true,
+          clipEnabled: false,
+          ...trimFields(trim),
+          aspect: ASPECT_DEFAULT,
+          previewSource: null,
+          previewError: null,
+        };
+      }),
+    togglePostMedia: (id) =>
+      set((prev) => ({
+        ...prev,
+        selectedMediaIds: prev.selectedMediaIds.includes(id)
+          ? prev.selectedMediaIds.filter((value) => value !== id)
+          : [...prev.selectedMediaIds, id],
+      })),
+    selectAllPostMedia: () =>
+      set((prev) => ({
+        ...prev,
+        selectedMediaIds: prev.urlMedia?.mediaItems.map((item) => item.id) ?? [],
+      })),
+    clearPostMedia: () => patch({ selectedMediaIds: [] }),
     toggleClip: () => set((prev) => ({ ...prev, clipEnabled: !prev.clipEnabled })),
     setClipDurationPreset: (preset) =>
       set((prev) => ({

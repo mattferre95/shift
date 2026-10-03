@@ -8,7 +8,7 @@ use crate::{
         profiles,
     },
     process::CancelToken,
-    providers::{self, DownloadKind, UrlMedia},
+    providers::{self, DownloadKind, PostMedia},
     validation,
 };
 use serde::Serialize;
@@ -32,7 +32,7 @@ pub struct Asset {
 }
 struct Session {
     input: InputSpec,
-    known_media: Option<UrlMedia>,
+    known_media: Option<PostMedia>,
     cancel: Arc<CancelToken>,
     asset: Mutex<Option<Arc<Asset>>>,
 }
@@ -79,7 +79,7 @@ impl PlaybackRegistry {
     pub fn create(&self, input: InputSpec) -> String {
         self.create_known(input, None)
     }
-    pub fn create_known(&self, input: InputSpec, known_media: Option<UrlMedia>) -> String {
+    pub fn create_known(&self, input: InputSpec, known_media: Option<PostMedia>) -> String {
         let id = uuid::Uuid::new_v4().to_string();
         self.sessions.lock().unwrap().insert(
             id.clone(),
@@ -195,16 +195,21 @@ impl PlaybackRegistry {
                     // of making the provider resolve the same post a second time.
                     let media = match session.known_media.clone() {
                         Some(media) => media,
-                        None => provider.analyze(&parsed, &temp.sub("meta")?, &session.cancel)?,
+                        None => provider
+                            .analyze(&parsed, &temp.sub("meta")?, &session.cancel)?
+                            .media_items
+                            .into_iter()
+                            .next()
+                            .ok_or_else(|| ShiftError::new("no_post_media", "No downloadable media was found."))?,
                     };
-                    let kind = if media.has_video {
+                    let kind = if media.has_video() {
                         DownloadKind::PreviewVideo
                     } else {
                         DownloadKind::PreviewAudio
                     };
                     on_stage(
                         PlaybackStage::SourceSelected,
-                        Some(if media.has_video { "video" } else { "audio" }.into()),
+                        Some(if media.has_video() { "video" } else { "audio" }.into()),
                     );
                     on_stage(PlaybackStage::DownloadingPreview, None);
                     let source = provider.download(
@@ -216,7 +221,7 @@ impl PlaybackRegistry {
                         &mut |_| {},
                     )?;
                     on_stage(PlaybackStage::MediaAvailable, None);
-                    (source, media.title, false)
+                    (source, media.filename_hint.unwrap_or_else(|| "media".into()), false)
                 }
             }
         };
@@ -258,11 +263,11 @@ impl PlaybackRegistry {
 
 fn preview_satisfies_export(
     input: &InputSpec,
-    media: Option<&UrlMedia>,
+    media: Option<&PostMedia>,
     probe: &MediaProbe,
 ) -> bool {
     let (quality, media) = match (input, media) {
-        (InputSpec::Url { .. }, Some(media)) if !media.has_video => return probe.audio.is_some(),
+        (InputSpec::Url { .. }, Some(media)) if !media.has_video() => return probe.audio.is_some(),
         (InputSpec::Url { quality, .. }, Some(media)) => (quality.as_deref(), media),
         _ => return false,
     };

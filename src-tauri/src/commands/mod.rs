@@ -12,10 +12,10 @@ use crate::media::preview;
 use crate::media::profiles::LoopSize;
 use crate::media::{ffprobe::probe, profiles};
 use crate::process::CancelToken;
-use crate::providers::{self, UrlMedia};
+use crate::providers::{self, DownloadKind, PostMedia, PostMediaType, UrlMedia};
 use crate::settings::SettingsStore;
 use crate::validation;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::time::Instant;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -73,6 +73,103 @@ pub async fn analyze_url(url: String) -> Result<UrlMedia> {
     .map_err(|e| {
         ShiftError::new("internal", "SHIFT couldn't complete that.").technical(e.to_string())
     })?
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PostDownloadRequest {
+    pub job_id: String,
+    pub items: Vec<PostMedia>,
+    pub destination_dir: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PostDownloadResult {
+    pub paths: Vec<String>,
+    pub size_bytes: u64,
+    pub directory: String,
+}
+
+/// Acquire several selected post assets into one folder without converting
+/// them. Each item keeps its native extension and receives a collision-safe
+/// name, so a carousel needs one folder panel rather than many Save panels.
+#[tauri::command]
+pub async fn download_post_items(
+    app: AppHandle,
+    request: PostDownloadRequest,
+) -> Result<PostDownloadResult> {
+    let cancel = app.state::<JobRegistry>().register(&request.job_id);
+    let job_id = request.job_id.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        if request.items.is_empty() || request.items.len() > 50 {
+            return Err(ShiftError::new(
+                "post_selection",
+                "Choose between 1 and 50 media items.",
+            ));
+        }
+        let destination = validation::validate_output_dir(&request.destination_dir)?;
+        let temp = filesystem::TempDir::create(&format!(
+            "post-{}",
+            uuid::Uuid::new_v4()
+        ))?;
+        let mut acquired_items = Vec::with_capacity(request.items.len());
+        for (index, item) in request.items.iter().enumerate() {
+            let source = validation::validate_url(&item.source)?;
+            let provider = providers::for_url(&source)
+                .ok_or_else(|| ShiftError::new("no_provider", "SHIFT can't handle this media."))?;
+            let item_dir = temp.sub(&format!("item-{index}"))?;
+            let kind = match item.media_type {
+                PostMediaType::Image => DownloadKind::Image,
+                PostMediaType::Video => DownloadKind::Video,
+                PostMediaType::Audio => DownloadKind::Audio,
+            };
+            let acquired = provider.download(
+                &source,
+                kind,
+                "best",
+                &item_dir,
+                &cancel,
+                &mut |_| {},
+            )?;
+            let ext = acquired
+                .extension()
+                .map(|v| v.to_string_lossy().to_ascii_lowercase())
+                .unwrap_or_else(|| match item.media_type {
+                    PostMediaType::Image => "jpg".into(),
+                    PostMediaType::Video => "mp4".into(),
+                    PostMediaType::Audio => "m4a".into(),
+                });
+            let hint = item.filename_hint.as_deref().unwrap_or("post-media");
+            let stem = std::path::Path::new(hint)
+                .file_stem()
+                .map(|v| filesystem::sanitize_stem(&v.to_string_lossy()))
+                .unwrap_or_else(|| format!("post-media-{:02}", index + 1));
+            acquired_items.push((acquired, stem, ext));
+        }
+        if cancel.is_cancelled() {
+            return Err(ShiftError::cancelled());
+        }
+        let mut paths = Vec::with_capacity(acquired_items.len());
+        let mut size_bytes = 0u64;
+        for (acquired, stem, ext) in acquired_items {
+            let output = filesystem::unique_path(&destination, &stem, &ext);
+            size_bytes += filesystem::finalize(&acquired, &output)?;
+            paths.push(output.to_string_lossy().into_owned());
+        }
+        Ok(PostDownloadResult {
+            paths,
+            size_bytes,
+            directory: validation::abbreviate_home(&destination),
+        })
+    })
+    .await
+    .map_err(|e| {
+        ShiftError::new("internal", "SHIFT couldn't download that post.")
+            .technical(e.to_string())
+    })?;
+    app.state::<JobRegistry>().finish(&job_id);
+    result
 }
 
 #[tauri::command]
@@ -351,7 +448,7 @@ pub fn shutdown(app: &AppHandle) {
 pub fn create_playback(
     app: AppHandle,
     input: jobs::InputSpec,
-    known_media: Option<UrlMedia>,
+    known_media: Option<PostMedia>,
 ) -> String {
     app.state::<crate::media::playback::PlaybackRegistry>()
         .create_known(input, known_media)
@@ -412,14 +509,18 @@ pub fn release_playback(app: AppHandle, id: String) {
 }
 
 #[tauri::command]
-pub fn release_url_media(thumbnail_path: Option<String>) {
-    let Some(path) = thumbnail_path.map(std::path::PathBuf::from) else {
-        return;
-    };
+pub fn release_url_media(thumbnail_paths: Vec<String>) {
     let root = std::env::temp_dir().join("SHIFT").join("thumbs");
-    if path.starts_with(&root) {
-        if let Some(parent) = path.parent().filter(|parent| parent.starts_with(&root)) {
-            let _ = std::fs::remove_dir_all(parent);
+    for thumbnail_path in thumbnail_paths {
+        let path = std::path::PathBuf::from(thumbnail_path);
+        if path.starts_with(&root) {
+            let post_dir = path.ancestors().find(|parent| {
+                parent.parent() == Some(root.as_path())
+            });
+            if let Some(parent) = post_dir {
+                let _ = std::fs::remove_dir_all(parent);
+                break;
+            }
         }
     }
 }

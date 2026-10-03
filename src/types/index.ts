@@ -167,18 +167,34 @@ export interface QualityOption {
   label: string;
 }
 
+export type PostMediaType = "video" | "image" | "audio";
+
+export interface PostMedia {
+  id: string;
+  type: PostMediaType;
+  width: number | null;
+  height: number | null;
+  duration: number | null;
+  thumbnailPath: string | null;
+  source: string;
+  filenameHint: string | null;
+  qualities: QualityOption[];
+}
+
 export interface UrlMedia {
   provider: string;
   url: string;
   title: string;
+  author: string | null;
+  platform: string;
   domain: string;
-  duration: number | null;
-  thumbnailPath: string | null;
-  qualities: QualityOption[];
-  hasVideo: boolean;
-  /** Source frame size when the provider reports it. */
-  width: number | null;
-  height: number | null;
+  mediaItems: PostMedia[];
+}
+
+export interface PostDownloadResult {
+  paths: string[];
+  sizeBytes: number;
+  directory: string;
 }
 
 export type MediaKind = "video" | "audio" | "image";

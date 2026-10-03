@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as ipc from "@/lib/ipc";
-import type { ExportRequest, UrlMedia } from "@/types";
+import type { ExportRequest, PostMedia } from "@/types";
 
 export interface PlaybackInfo {
   path: string;
@@ -33,7 +33,7 @@ const displayStatus = (stage: ipc.PlaybackStage): PlaybackStatus => {
 export function usePlayback(
   input: ExportRequest["input"] | null,
   enabled: boolean,
-  knownMedia: UrlMedia | null = null,
+  knownMedia: PostMedia | null = null,
 ) {
   // Preview quality is independent from export quality. A URL gets one
   // lightweight player asset and output/quality chip changes reuse it.

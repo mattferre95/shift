@@ -58,6 +58,16 @@ MP4 → MOV is a copy; anything → WEBM transcodes.
 only reliable on some extractors. V1 takes the predictable path. Revisit per
 provider once there is a second provider to compare against.
 
+**A public post is an ordered collection of media.** `UrlProvider::analyze`
+returns a `PostResult` containing `PostMedia` entries, each with its own type,
+source, dimensions, duration, thumbnail and quality choices. Ordinary URLs are
+the one-item case. X, Instagram and TikTok sometimes expose images or carousel
+order only in public page metadata, so the yt-dlp provider parses that metadata
+as a narrow fallback while yt-dlp continues to own network acquisition. A
+single active item feeds preview and conversion; multiple selected items are
+downloaded to one folder with their native extensions. Every thumbnail uses a
+per-item cache directory, and resetting the shift removes the whole post cache.
+
 **Progress is never invented.** FFmpeg's `-progress` stream divided by a known
 duration is a real percentage. yt-dlp reports bytes via `--progress-template`;
 when the total is unknown the provider reports `None` and the UI falls back to

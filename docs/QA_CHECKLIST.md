@@ -95,6 +95,11 @@ from published sample/CC-BY sources.
 | 51 | Trimmed GIF → MP4: H.264 yuv420p, SAR 1:1, no audio, duration = selection, correct speed | ✅ 5.750s for 5.749s; every checkpoint the right source frame |
 | 52 | GIF → animated WEBP: whole animation at the correct speed | ✅ ends 21.12s of 21.14s; all 147 frames on their 12.5 fps slot |
 | 53 | GIF preview proxy deleted on New shift | ✅ no playback dirs left |
+| 54 | Public X photos keep source order and original dimensions | ✅ focused parser fixture and public smoke coverage |
+| 55 | Instagram mixed carousel preserves image/video item types | ✅ focused parser fixture |
+| 56 | TikTok photo post ignores its soundtrack as a media item | ✅ focused parser fixture |
+| 57 | Multi-item picker activates and selects items independently | ✅ focused UI test |
+| 58 | Existing URL preview source reuse still uses the selected item metadata | ✅ focused playback coverage |
 
 ## Also verified
 

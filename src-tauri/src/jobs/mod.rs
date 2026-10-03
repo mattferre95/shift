@@ -573,19 +573,12 @@ fn execute(
     // The *input* decides which pipeline runs, not the output. WEBP is both a
     // still and an animation, so asking the format alone would send a video
     // headed for animated WebP into the image pipeline.
-    if let InputSpec::Local { path } = &request.input {
-        if image_input(path, cancel) {
-            return execute_image(
-                app,
-                job_id,
-                request,
-                cancel,
-                settings,
-                slot,
-                temp,
-                &output_dir,
-            );
-        }
+    let remote_image = matches!(request.input, InputSpec::Url { .. }) && request.format.is_image();
+    let local_image = matches!(&request.input, InputSpec::Local { path } if image_input(path, cancel));
+    if remote_image || local_image {
+        return execute_image(
+            app, job_id, request, cancel, settings, slot, temp, &output_dir,
+        );
     }
 
     let playback = app
@@ -612,7 +605,8 @@ fn execute(
                 })?;
                 let cache = temp.sub("meta")?;
                 let media = provider.analyze(&parsed, &cache, cancel)?;
-                (media.title, media.duration, None)
+                let duration = media.media_items.first().and_then(|item| item.duration);
+                (media.title, duration, None)
             }
             InputSpec::Local { path } => {
                 let resolved = validation::validate_input_path(path)?;
@@ -789,14 +783,23 @@ fn execute_image(
     temp: TempDir,
     output_dir: &std::path::Path,
 ) -> Result<()> {
-    let InputSpec::Local { path } = &request.input else {
-        return Err(
-            ShiftError::new("no_image_url", "SHIFT can't fetch images from a link yet.")
-                .hint("Drop the image in instead."),
-        );
+    let resolved = match &request.input {
+        InputSpec::Local { path } => validation::validate_input_path(path)?,
+        InputSpec::Url { url, .. } => {
+            let parsed = validation::validate_url(url)?;
+            let provider = providers::for_url(&parsed)
+                .ok_or_else(|| ShiftError::new("no_provider", "SHIFT can't handle this link."))?;
+            let download = temp.sub("download")?;
+            provider.download(
+                &parsed,
+                DownloadKind::Image,
+                "best",
+                &download,
+                cancel,
+                &mut |_| {},
+            )?
+        }
     };
-
-    let resolved = validation::validate_input_path(path)?;
     let probe = image::probe(&resolved, cancel)?;
     let compression = request.compression.unwrap_or(Compression::None);
 

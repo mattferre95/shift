@@ -9,7 +9,7 @@ use shift_lib::{
         profiles::{build_plan, LoopSize, OutputFormat},
     },
     process::{run_capture, Binary, CancelToken},
-    providers::{DownloadKind, UrlMedia, UrlProvider},
+    providers::{DownloadKind, PostMedia, PostMediaType, UrlMedia, UrlProvider},
 };
 use std::{
     path::{Path, PathBuf},
@@ -72,13 +72,20 @@ impl UrlProvider for Provider {
             provider: self.id().into(),
             url: url.to_string(),
             title: "Controlled tones".into(),
+            author: None,
+            platform: "fixture".into(),
             domain: "example.test".into(),
-            duration: Some(3.0),
-            thumbnail_path: None,
-            qualities: vec![],
-            has_video: video,
-            width: video.then_some(320),
-            height: video.then_some(180),
+            media_items: vec![PostMedia {
+                id: "one".into(),
+                media_type: if video { PostMediaType::Video } else { PostMediaType::Audio },
+                duration: Some(3.0),
+                thumbnail_path: None,
+                qualities: vec![],
+                source: url.to_string(),
+                filename_hint: Some("controlled".into()),
+                width: video.then_some(320),
+                height: video.then_some(180),
+            }],
         })
     }
     fn download(
@@ -117,7 +124,7 @@ fn proxies_decode_and_url_source_is_reused_for_audio_exports() {
                 &CancelToken::new(),
             )
             .unwrap();
-        let id = registry.create_known(input.clone(), Some(known));
+        let id = registry.create_known(input.clone(), known.media_items.first().cloned());
         let asset = registry
             .prepare_with_provider(&id, false, Some(&provider))
             .unwrap();

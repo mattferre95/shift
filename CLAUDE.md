@@ -63,6 +63,11 @@ Sidecars are not committed. `npm run sidecars` is required before the first buil
   `aspect_preview`, so the dimensions shown are the dimensions produced.
 - **yt-dlp is one provider behind `providers::UrlProvider`**, not a hardcoded
   dependency.
+- **A URL result is an ordered media collection.** Ordinary URLs have one
+  `PostMedia`; public X, Instagram and TikTok posts may have several images and
+  videos. Preview and conversion follow the active item, while a multi-item
+  selection downloads native sources into one folder. Keep provider order and
+  per-item cache ownership intact.
 - **Never invent progress.** Report a percentage only when the native layer has
   a real one; otherwise show stage position.
 - **Never overwrite an output by accident.** Automatically named outputs go
@@ -84,7 +89,8 @@ Both look like "the app hangs with no child process in `ps`":
 ## Scope
 
 Supported today: URL download with optional clipping, exporting
-MP4/GIF/WEBP/MP3/WAV; local video and audio conversion, trimming and audio
+MP4/GIF/WEBP/MP3/WAV; public X, Instagram and TikTok video/image posts,
+including selected multi-item downloads; local video and audio conversion, trimming and audio
 extraction across MP4/MOV/WEBM and MP3/M4A/WAV/FLAC; silent looping export to
 GIF (max 15s) and animated WEBP (max 30s); aspect reframing of any visual output
 by ratio or exact size, cropping or padding but never stretching; and image
@@ -94,7 +100,8 @@ Reads more containers than it writes — MKV, M4V, AVI, AIFF, OGG and Opus
 included — and takes an animated GIF as a moving source, exportable to
 MP4/MOV/WEBM/GIF/WEBP with trim and aspect; a single-frame GIF is a still. Every export is named and placed through the native Save panel.
 
-Still out: batch, presets, history, accounts, analytics, cloud. Ideas for later
+Still out: general local-file batch, presets, history, accounts, analytics,
+cloud. Ideas for later
 go in the future-work section of `docs/ARCHITECTURE.md`, not into the app.
 
 ## Git

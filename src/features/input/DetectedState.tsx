@@ -44,7 +44,11 @@ export function DetectedState() {
           <div className="mt-1 font-mono text-[13px] text-shift-muted">
             {isUrl ? (
               <>
-                {formatDuration(media?.duration)} &nbsp;·&nbsp; {media?.domain}
+                {[
+                  s.activeMedia?.type.toUpperCase(),
+                  formatDuration(s.activeMedia?.duration),
+                  media?.domain,
+                ].filter(Boolean).join("  ·  ")}
               </>
             ) : s.isImage ? (
               [
@@ -79,6 +83,8 @@ export function DetectedState() {
         </button>
       </div>
 
+      {isUrl && (media?.mediaItems.length ?? 0) > 1 && <PostMediaPicker />}
+
       <div className="my-[18px] h-px bg-[var(--hairline-faint)]" />
 
       {/* ---- actions ------------------------------------------------------ */}
@@ -90,7 +96,7 @@ export function DetectedState() {
             {s.showAspect && <><AspectRatios compact />{s.aspect.ratio !== "original" && <FrameControls />}</>}
             <Modifiers />
           </div>
-          <TrimPlayer key={s.localMedia?.path ?? s.urlMedia?.url} />
+          <TrimPlayer key={s.localMedia?.path ?? s.activeMedia?.source} />
         </div>
       ) : <div className="flex flex-col gap-[18px] overflow-y-auto">
         <Section title="OUTPUT">
@@ -122,6 +128,7 @@ export function DetectedState() {
                 <Preview />
               </div>
             )}
+            {s.isImage && !s.aspectPreview && s.previewImage && <SourceImagePreview />}
           </div>
         ) : (
           <Modifiers />
@@ -149,7 +156,9 @@ export function DetectedState() {
           ].join(" ")}
         >
           {/* The ellipsis is literal: this opens the native Save panel. */}
-          EXPORT…
+          {isUrl && (s.urlMedia?.mediaItems.length ?? 0) > 1
+            ? `DOWNLOAD ${s.selectedMediaCount} SELECTED…`
+            : "EXPORT…"}
         </button>
       </div>
 
@@ -230,7 +239,7 @@ function Modifiers() {
       {s.showQuality && (
         <Section title="QUALITY">
           <div className="flex flex-wrap gap-2">
-            {s.urlMedia?.qualities.map((q) => (
+            {s.activeMedia?.qualities.map((q) => (
               <Chip
                 key={q.id}
                 label={q.label}
@@ -244,7 +253,7 @@ function Modifiers() {
 
       <SoundControl />
 
-      {isUrl ? (
+      {isUrl && !s.isImage ? (
         <div>
           <div className="mb-[10px] flex items-center justify-between">
             <div className="text-[11px] tracking-[0.08em] text-shift-label">CLIP</div>
@@ -515,8 +524,8 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 }
 
 function Thumbnail() {
-  const { urlMedia } = useShift();
-  const src = urlMedia?.thumbnailPath ? convertFileSrc(urlMedia.thumbnailPath) : null;
+  const { activeMedia } = useShift();
+  const src = activeMedia?.thumbnailPath ? convertFileSrc(activeMedia.thumbnailPath) : null;
   return (
     <div className="flex h-[58px] w-[100px] shrink-0 items-center justify-center overflow-hidden rounded-[7px] bg-shift-track [background-image:repeating-linear-gradient(135deg,oklch(1_0_0_/_0.03)_0px,oklch(1_0_0_/_0.03)_6px,transparent_6px,transparent_12px)]">
       {src ? (
@@ -529,7 +538,16 @@ function Thumbnail() {
 }
 
 function UrlPreviewStatus() {
-  const { playback } = useShift();
+  const { playback, activeMedia, urlMedia } = useShift();
+  if (activeMedia?.type === "image") {
+    return (
+      <div className="mt-2 text-[11px] text-shift-muted" role="status">
+        {urlMedia && urlMedia.mediaItems.length > 1
+          ? `Found ${urlMedia.mediaItems.length} media items`
+          : "Ready"}
+      </div>
+    );
+  }
   const labels = {
     resolving: "Resolving link",
     downloading: "Downloading preview",
@@ -551,6 +569,85 @@ function UrlPreviewStatus() {
       {working && <span aria-hidden="true" className="h-3 w-3 animate-spin rounded-full border border-shift-quiet border-t-shift-emerald" />}
       <span>{labels[playback.status]}</span>
       {working && <button type="button" onClick={playback.cancel} className="ml-1 underline decoration-shift-quiet underline-offset-2 hover:text-shift-body">Cancel</button>}
+    </div>
+  );
+}
+
+export function PostMediaPicker() {
+  const s = useShift();
+  const items = s.urlMedia?.mediaItems ?? [];
+  return (
+    <div className="mt-[14px]">
+      <div className="mb-[8px] flex items-center justify-between">
+        <div className="text-[11px] tracking-[0.08em] text-shift-label">
+          POST MEDIA <span className="ml-2 normal-case tracking-normal text-shift-ghost">{items.length} items</span>
+        </div>
+        <div className="flex gap-3 text-[11px]">
+          <button type="button" onClick={s.selectAllPostMedia} className="text-shift-muted hover:text-shift-body">Select all</button>
+          <button type="button" onClick={s.clearPostMedia} className="text-shift-muted hover:text-shift-body">Clear</button>
+        </div>
+      </div>
+      <div className="flex gap-2 overflow-x-auto pb-1">
+        {items.map((item, index) => {
+          const active = index === s.activeMediaIndex;
+          const selected = s.selectedMediaIds.includes(item.id);
+          const src = item.thumbnailPath ? convertFileSrc(item.thumbnailPath) : null;
+          return (
+            <button
+              key={item.id}
+              type="button"
+              aria-label={`${item.type} ${index + 1}`}
+              aria-pressed={selected}
+              onClick={() => s.selectPostMedia(index)}
+              className={[
+                "relative h-[58px] w-[86px] shrink-0 overflow-hidden rounded-[7px] border bg-shift-track",
+                active ? "border-shift-emerald" : "border-[var(--hairline-strong)]",
+              ].join(" ")}
+            >
+              {src ? <img src={src} alt="" className="h-full w-full object-cover" /> : (
+                <span className="font-mono text-[9px] text-shift-label">{item.type.toUpperCase()}</span>
+              )}
+              {item.type === "video" && (
+                <span className="absolute inset-0 flex items-center justify-center text-[14px] text-white drop-shadow">▶</span>
+              )}
+              <span
+                role="checkbox"
+                aria-checked={selected}
+                onClick={(event) => { event.stopPropagation(); s.togglePostMedia(item.id); }}
+                className={[
+                  "absolute right-1 top-1 flex h-[17px] w-[17px] items-center justify-center rounded-[4px] border text-[10px] font-bold",
+                  selected
+                    ? "border-shift-emerald bg-shift-emerald text-shift-on-emerald"
+                    : "border-white/35 bg-black/45 text-transparent",
+                ].join(" ")}
+              >✓</span>
+              <span className="absolute bottom-1 left-1 rounded bg-black/55 px-1 font-mono text-[9px] text-white/80">
+                {index + 1}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function SourceImagePreview() {
+  const { previewImage, activeMedia } = useShift();
+  if (!previewImage) return null;
+  return (
+    <div className="w-[220px] shrink-0">
+      <div className="mb-[10px] flex items-baseline justify-between gap-2">
+        <span className="text-[11px] tracking-[0.08em] text-shift-label">PREVIEW</span>
+        {activeMedia?.width && activeMedia.height && (
+          <span className="font-mono text-[10px] text-shift-ghost">
+            {activeMedia.width} × {activeMedia.height}
+          </span>
+        )}
+      </div>
+      <div className="flex h-[150px] items-center justify-center overflow-hidden rounded-[6px] border border-[var(--hairline-strong)] bg-shift-track">
+        <img src={previewImage} alt="" draggable={false} className="max-h-full max-w-full object-contain" />
+      </div>
     </div>
   );
 }

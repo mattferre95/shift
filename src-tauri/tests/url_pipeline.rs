@@ -38,16 +38,17 @@ fn analyzes_a_real_url() {
     let provider = providers::for_url(&url).expect("a provider handles http(s)");
     let media = provider.analyze(&url, &workspace("meta"), &CancelToken::new()).unwrap();
 
-    println!("title={} domain={} duration={:?}", media.title, media.domain, media.duration);
+    let item = media.media_items.first().unwrap();
+    println!("title={} domain={} duration={:?}", media.title, media.domain, item.duration);
     assert_eq!(media.provider, "ytdlp");
     assert!(!media.title.is_empty());
     // The generic extractor reports no codec detail; a plain .mp4 must still
     // offer MP4 rather than being mistaken for an audio-only source.
-    assert!(media.has_video);
+    assert!(item.has_video());
     // With no separate renditions there is exactly one honest choice.
-    assert_eq!(media.qualities.len(), 1);
+    assert_eq!(item.qualities.len(), 1);
     // It reports no duration either; SHIFT must not invent one.
-    assert!(media.duration.is_none() || media.duration.unwrap() > 0.0);
+    assert!(item.duration.is_none() || item.duration.unwrap() > 0.0);
 }
 
 #[test]
@@ -57,14 +58,15 @@ fn analyzes_a_site_a_real_extractor_handles() {
     let provider = providers::for_url(&url).unwrap();
     let media = provider.analyze(&url, &workspace("site"), &CancelToken::new()).unwrap();
 
+    let item = media.media_items.first().unwrap();
     println!(
         "title={} domain={} duration={:?} qualities={:?} thumb={:?}",
-        media.title, media.domain, media.duration, media.qualities, media.thumbnail_path
+        media.title, media.domain, item.duration, item.qualities, item.thumbnail_path
     );
     assert_eq!(media.domain, "archive.org");
-    assert!(media.duration.unwrap() > 0.0);
+    assert!(item.duration.unwrap() > 0.0);
     // The thumbnail is fetched through the backend, never by the webview.
-    if let Some(thumb) = &media.thumbnail_path {
+    if let Some(thumb) = &item.thumbnail_path {
         assert!(std::path::Path::new(thumb).is_file());
     }
 }

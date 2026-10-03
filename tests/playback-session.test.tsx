@@ -2,7 +2,7 @@ import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { usePlayback } from "../src/state/playback";
 import * as ipc from "../src/lib/ipc";
-import type { UrlMedia } from "../src/types";
+import type { PostMedia } from "../src/types";
 
 vi.mock("../src/lib/ipc", () => ({
   createPlayback: vi.fn(),
@@ -14,9 +14,9 @@ vi.mock("../src/lib/ipc", () => ({
 
 const local = { kind: "local" as const, path: "/fixture.mp3" };
 const url = { kind: "url" as const, url: "https://x.com/example/status/1", quality: "best" };
-const media: UrlMedia = {
-  provider: "fixture", url: url.url, title: "Clip", domain: "x.com", duration: 8,
-  thumbnailPath: null, qualities: [{ id: "best", label: "Best" }], hasVideo: true,
+const media: PostMedia = {
+  id: "one", type: "video", source: url.url, filenameHint: "clip.mp4", duration: 8,
+  thumbnailPath: null, qualities: [{ id: "best", label: "Best" }],
   width: 640, height: 360,
 };
 const info = { path: "/preview.mp4", duration: 8, hasVideo: true, hasAudio: true, width: 640, height: 360, proxy: false };

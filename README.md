@@ -30,13 +30,17 @@ converters to navigate.
 
 ## What it does
 
-### URL media
+### URL and social media
 
 - Paste any link yt-dlp supports
+- Download public video and image media from **X · Instagram · TikTok**
+- Keep multi-image and mixed-media posts in their original order
+- Preview individual post items and download selected carousel items in one batch
 - Read the title, thumbnail, duration and source before committing to anything
 - Export **MP4**, **GIF**, **WEBP**, **MP3**, **M4A** or **WAV**
 - Optional **IN / OUT** clipping with millisecond precision
 - Quality selection where the source actually offers alternatives
+- Use SHIFT's existing trim, aspect and conversion tools on individual media items
 
 ### Local video and audio
 

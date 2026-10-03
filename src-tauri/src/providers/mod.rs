@@ -22,25 +22,51 @@ pub struct QualityOption {
     pub label: String,
 }
 
-/// What SHIFT knows about a remote item after analysis (URL-02).
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum PostMediaType {
+    Video,
+    Image,
+    Audio,
+}
+
+/// One ordered media item inside a public post.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct UrlMedia {
-    /// Which provider produced this, so a second one stays distinguishable.
+pub struct PostMedia {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub media_type: PostMediaType,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub duration: Option<f64>,
+    pub thumbnail_path: Option<String>,
+    /// A post URL for extractor-backed video/audio, or the public CDN URL for an image.
+    pub source: String,
+    pub filename_hint: Option<String>,
+    pub qualities: Vec<QualityOption>,
+}
+
+impl PostMedia {
+    pub fn has_video(&self) -> bool {
+        self.media_type == PostMediaType::Video
+    }
+}
+
+/// What SHIFT knows about an analyzed public URL.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PostResult {
     pub provider: String,
     pub url: String,
     pub title: String,
+    pub author: Option<String>,
+    pub platform: String,
     pub domain: String,
-    pub duration: Option<f64>,
-    /// Local path to a cached thumbnail, served through the asset protocol.
-    pub thumbnail_path: Option<String>,
-    pub qualities: Vec<QualityOption>,
-    pub has_video: bool,
-    /// The source frame size, when the provider reports it. Lets the aspect
-    /// controls give real dimensions before anything is fetched.
-    pub width: Option<u32>,
-    pub height: Option<u32>,
+    pub media_items: Vec<PostMedia>,
 }
+
+pub type UrlMedia = PostResult;
 
 /// What a download should produce.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,6 +81,8 @@ pub enum DownloadKind {
     PreviewVideo,
     /// Small audio-only source for the trim player.
     PreviewAudio,
+    /// Original/highest practical still image, without conversion.
+    Image,
 }
 
 pub trait UrlProvider: Send + Sync {

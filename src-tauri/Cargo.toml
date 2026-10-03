@@ -25,6 +25,7 @@ url = "2"
 dirs = "6"
 rand = "0.8"
 libc = "0.2"
+base64 = "0.22"
 
 [profile.release]
 codegen-units = 1
