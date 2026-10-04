@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, expect, test, vi } from "vitest";
-import { PostMediaPicker } from "../src/features/input/DetectedState";
+import { PostMediaPicker } from "../src/features/social/PostMediaPicker";
 
 const selectPostMedia = vi.fn();
 const togglePostMedia = vi.fn();

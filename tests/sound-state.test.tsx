@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
-import { SoundControlView } from "../src/features/input/DetectedState";
+import { SoundControlView } from "../src/features/edit/SoundControl";
 import { ShiftProvider, useShift } from "../src/state/shift";
 import * as ipc from "../src/lib/ipc";
 import type { LocalMedia } from "../src/types";

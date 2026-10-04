@@ -242,6 +242,24 @@ square.
 children. Each job owns one `CancelToken`; the child is spawned into its own
 process group and cancel sends `SIGTERM` to the whole group.
 
+## Interface (v1.1)
+
+**Modes are views, not pipelines.** The sidebar's Download, Convert, Edit,
+Resize and Compress are presentations of the one source and the one export in
+`state/shift.tsx`. The chosen view lives in `state/view.tsx` and never enters
+`ExportRequest`; opening a mode changes nothing that will be produced. Which
+modes are available is derived from the same flags the export reads (`isImage`,
+`showAspect`, `outputs`, compression choices), so the sidebar cannot offer a
+control the export would ignore. A post with several items is downloaded as
+its original files, so it offers Download only.
+
+**Words about the export are read, not computed twice.** The applied-settings
+summary, the reason Export is blocked and the loop limits come from
+`features/export/summary.ts`, which only reads state. Nothing in the interface
+predicts an output size; the Complete screen reports the measured one.
+
+The visual system is documented in `DESIGN_SPEC.md`.
+
 ## Two things that cost real time
 
 **`pre_exec` deadlocks a GUI app.** Setting the process group with a `pre_exec`
@@ -310,6 +328,8 @@ create, prepare, and release it. Preparation runs on a worker with the existing
 process-group cancellation token. URL preparation starts as soon as detection
 finishes and reuses the detected metadata instead of resolving the provider a
 second time. Output, quality, aspect, and range changes keep the same preview.
+A post with several items prepares no preview: it is shown from its thumbnails
+and downloaded as its original files.
 
 For video, `UrlProvider` prefers a progressive MP4 no larger than 540p; for
 audio it prefers a directly playable audio stream. The downloaded preview can

@@ -1,13 +1,17 @@
 # SHIFT — QA Checklist
 
-Acceptance checks for V1. Automated coverage is named where it exists; the rest
-is a manual pass on a real build.
+Acceptance checks for V1, and the interface pass for v1.1. Automated coverage
+is named where it exists; the rest is a manual pass on a real build.
 
 ## Automated
 
 ```bash
 cd src-tauri && cargo test                                   # unit + pipeline
 cargo test --test url_pipeline -- --ignored --nocapture      # needs network
+```
+
+```bash
+npx tsc --noEmit && npm test                                 # frontend
 ```
 
 - `cargo test --lib` — 74 tests, including the whole `media::aspect` geometry:
@@ -100,6 +104,31 @@ from published sample/CC-BY sources.
 | 56 | TikTok photo post ignores its soundtrack as a media item | ✅ focused parser fixture |
 | 57 | Multi-item picker activates and selects items independently | ✅ focused UI test |
 | 58 | Existing URL preview source reuse still uses the selected item metadata | ✅ focused playback coverage |
+
+## v1.1 interface
+
+Checked at 980×680 and at the 780×560 minimum: no horizontal overflow, the
+primary action always on screen, inspector bodies scrolling above it.
+
+| # | Check | Status |
+| --- | --- | --- |
+| 1 | Sidebar modes enable only what applies (video, audio output, image, multi-item post) | ✅ |
+| 2 | Opening a mode changes nothing in the export | ✅ |
+| 3 | No mode is shown as current during Processing / Complete / Error | ✅ |
+| 4 | Trim presets: moving IN keeps the preset, OUT edits switch to Custom | ✅ tests + native |
+| 5 | Dragging the selected range moves IN and OUT together | ✅ native |
+| 6 | Sound off mutes the preview and appears in the summary | ✅ |
+| 7 | GIF 15s / animated WEBP 30s limits shown and enforced | ✅ |
+| 8 | Resize draws `aspect_preview`'s box; Fit pads black or transparent by format | ✅ |
+| 9 | Resize keeps a picture with Trim on | ✅ |
+| 10 | Compress shows only the format's real levels; PNG None / Optimize | ✅ |
+| 11 | Convert lists only the backend's outputs, grouped by kind | ✅ |
+| 12 | Multi-item post: selection and active item are separate, none-selected blocks Download | ✅ |
+| 13 | Processing shows a percentage only when the stage reports one | ✅ |
+| 14 | Complete shows measured sizes; the change only when both are known | ✅ |
+| 15 | Error separates input and export failures; Technical details wraps and scrolls | ✅ |
+| 16 | Traffic lights, drag regions (header and sidebar drag, controls do not), minimum size | ✅ native |
+| 17 | Native Open and Save panels; real export from the installed build | ✅ |
 
 ## Also verified
 

@@ -6,11 +6,14 @@ export function TimeField({
   displayValue,
   onChange,
   invalid,
+  fill,
 }: {
   label: string;
   displayValue: string;
   onChange: (v: string) => void;
   invalid?: boolean;
+  /** Take the width of the container instead of the fixed field width. */
+  fill?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(displayValue);
@@ -19,8 +22,8 @@ export function TimeField({
   }, [displayValue, editing]);
 
   return (
-    <label className="block">
-      <span className="mb-[5px] block text-[10px] tracking-[0.06em] text-shift-label">{label}</span>
+    <label className={fill ? "block min-w-0 flex-1" : "block"}>
+      <span className="mb-[5px] block text-[10px] tracking-[0.06em] text-shift-soft">{label}</span>
       <input
         value={editing ? draft : displayValue}
         onFocus={() => {
@@ -37,12 +40,12 @@ export function TimeField({
         inputMode="numeric"
         placeholder="00:00"
         className={[
-          "w-[110px] rounded-md px-[10px] py-[7px]",
+          fill ? "w-full rounded-md px-2 py-[7px]" : "w-[110px] rounded-md px-[10px] py-[7px]",
           "bg-shift-input font-mono text-[13px] text-shift-body",
           "border transition-colors duration-[140ms]",
           invalid
-            ? "border-[oklch(0.75_0.13_35_/_0.55)]"
-            : "border-[var(--hairline-strong)] focus:border-[var(--emerald-edge)]",
+            ? "border-[var(--danger-edge)]"
+            : "border-[var(--hairline-strong)] focus:border-[var(--accent-edge)]",
         ].join(" ")}
       />
     </label>

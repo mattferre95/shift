@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="public/brand/shift-symbol.png" alt="" width="104">
-</p>
-
 <h1 align="center">SHIFT™</h1>
 
 <p align="center">
@@ -9,24 +5,28 @@
 </p>
 
 <p align="center">
-  A local-first macOS media utility for downloading, clipping, converting,
-  compressing and transforming everyday media.
+  A local-first macOS media utility for downloading, trimming, converting,
+  resizing and exporting video, audio, images and GIFs.
 </p>
 
 <p align="center">
-  <img src="docs/assets/shift-main.png" alt="SHIFT on macOS, waiting for a file or a link" width="860">
+  <img src="docs/assets/shift-main.png" alt="SHIFT on macOS: trimming a clip in Edit, with the export settings beside it" width="860">
 </p>
 
 ## How it works
 
 ```
-Input → Detect → Choose output → Export
+Input → Detect → Shape it → Export
 ```
 
 Drop a file or paste a link. SHIFT works out what it is and shows only the
 outputs that make sense for it — a photo never offers you a bitrate, an audio
-file never offers you a resolution. There is no dashboard of unrelated
-converters to navigate.
+file never offers you a resolution.
+
+One source, one export, a few focused views of it in the sidebar:
+**Download**, **Convert**, **Edit**, **Resize** and **Compress**. A trim set in
+Edit and a crop set in Resize both land in the same file; each view only shows
+up when it applies to what you opened.
 
 ## What it does
 
@@ -35,12 +35,12 @@ converters to navigate.
 - Paste any link yt-dlp supports
 - Download public video and image media from **X · Instagram · TikTok**
 - Keep multi-image and mixed-media posts in their original order
-- Preview individual post items and download selected carousel items in one batch
+- Pick which items of a carousel or mixed-media post to download; they are
+  saved as posted, together, into a folder you choose
 - Read the title, thumbnail, duration and source before committing to anything
 - Export **MP4**, **GIF**, **WEBP**, **MP3**, **M4A** or **WAV**
 - Optional **IN / OUT** clipping with millisecond precision
 - Quality selection where the source actually offers alternatives
-- Use SHIFT's existing trim, aspect and conversion tools on individual media items
 
 ### Local video and audio
 

@@ -176,6 +176,11 @@ interface ShiftApi extends ShiftState {
   moveClipRange: (start: number) => void;
   startExport: () => void;
   saving: boolean;
+  /**
+   * What the user last handed SHIFT, for display only: the link being resolved,
+   * or the one that failed. Read-only; `retry` is still the way to repeat it.
+   */
+  lastInput: { kind: "url" | "file"; value: string } | null;
   cancel: () => void;
   reset: () => void;
   retry: () => void;
@@ -422,7 +427,12 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
   }, [s.screen, s.localMedia, s.urlMedia, s.activeMediaIndex]);
 
   const activeMedia = s.urlMedia?.mediaItems[s.activeMediaIndex] ?? null;
-  const playbackInput = activeMedia && activeMedia.type !== "image"
+  // A post with several items downloads its original files and is shown from
+  // its thumbnails; nothing plays, so no preview is prepared for it.
+  const multiPost = (s.urlMedia?.mediaItems.length ?? 0) > 1;
+  const playbackInput = multiPost
+    ? null
+    : activeMedia && activeMedia.type !== "image"
     ? { kind: "url" as const, url: activeMedia.source, quality: s.quality }
     : s.localMedia && s.localMedia.kind !== "image"
       ? { kind: "local" as const, path: s.localMedia.path }
@@ -513,17 +523,17 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
 
   // ---- preview material ---------------------------------------------------
   // One cheap image per source, cached in the native layer. Cycling through
-  // ratios never touches this effect: it depends on the file and, for moving
-  // media, on the IN point — not on the aspect at all.
+  // ratios never touches this effect: it depends on the file alone. Moving
+  // media uses one representative frame from the middle, whether or not a trim
+  // is set, so the framing preview has a picture in every state and dragging
+  // IN never asks for a fresh extraction.
   const previewAt = useMemo(() => {
     if (!s.localMedia || s.localMedia.kind === "image") return null;
-    const inPoint = s.clipEnabled ? parseTimestamp(s.clipIn) : null;
-    // Whole seconds only, so scrubbing does not re-extract.
-    const at = inPoint ?? (s.localMedia.duration ? s.localMedia.duration / 2 : null);
-    return at == null ? null : Math.floor(at);
-  }, [s.localMedia, s.clipEnabled, s.clipIn]);
+    // Whole seconds only, so the native cache is hit on every repeat.
+    return s.localMedia.duration ? Math.floor(s.localMedia.duration / 2) : null;
+  }, [s.localMedia]);
 
-  const localPath = !s.clipEnabled && (s.localMedia?.hasVideo || s.localMedia?.kind === "image") ? s.localMedia.path : null;
+  const localPath = s.localMedia?.hasVideo || s.localMedia?.kind === "image" ? s.localMedia.path : null;
   useEffect(() => {
     if (!localPath) {
       patch({ previewSource: null, previewError: null });
@@ -758,6 +768,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
     canExport,
     playback,
     saving,
+    lastInput: lastInput.current,
     extractAudio,
     isImage,
     sourceMoves,
