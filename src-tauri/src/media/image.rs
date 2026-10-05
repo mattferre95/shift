@@ -421,16 +421,6 @@ fn png_optimize_args(input: &Path, output: &Path) -> Vec<String> {
     ]
 }
 
-/// Suffix for the generated filename, so a compressed export is distinguishable.
-pub fn name_suffix(compression: Compression, format: OutputFormat) -> Option<&'static str> {
-    match (compression, format) {
-        (Compression::None, _) => None,
-        (Compression::Optimize, _) => None,
-        (_, OutputFormat::Png) => None,
-        _ => Some("-compressed"),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

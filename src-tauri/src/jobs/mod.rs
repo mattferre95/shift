@@ -344,46 +344,40 @@ fn plan_actions(
     (actions, stages)
 }
 
-/// Name the result the way the user would (EXP-02).
+/// Name the result the way the user would (EXP-02): the source, then what was
+/// done to it — `<source>_<aspect>_<duration>`, e.g. `carti_169_15s`. Only
+/// shape and length are named; compression, sound, loop size and Fill/Fit are
+/// not, and a default never is.
 fn output_stem(request: &ExportRequest, source_title: &str, clip: Option<ClipRange>) -> String {
-    let base = filesystem::sanitize_stem(source_title);
-    match (&request.input, clip) {
-        (InputSpec::Url { .. }, Some(range)) => format!(
-            "{base}-{}-{}",
-            validation::timestamp_tag(range.start),
-            validation::timestamp_tag(range.end)
-        ),
-        (InputSpec::Url { .. }, None) => base,
-        // A trimmed loop is already named by what it is, not by the trim.
-        (InputSpec::Local { .. }, Some(_)) if request.format.is_animation() => base,
-        (InputSpec::Local { .. }, Some(_)) => format!("{base}-trimmed"),
-        (InputSpec::Local { path }, None) if request.format.is_image() => {
-            let base = filesystem::sanitize_stem(source_title);
-            let suffix = request
-                .compression
-                .map(|c| image::name_suffix(c, request.format))
-                .unwrap_or(None);
-            match suffix {
-                Some(sfx) => format!("{base}{sfx}"),
-                None => base,
-            }
-        }
-        (InputSpec::Local { path }, None) => {
-            let source_ext = PathBuf::from(path)
-                .extension()
-                .map(|e| e.to_string_lossy().to_ascii_lowercase())
-                .unwrap_or_default();
-            // Extracting audio changes the extension, so the plain name is
-            // already unambiguous; a container swap needs the hint.
-            if source_ext == request.format.ext() {
-                format!("{base}-converted")
-            } else if request.format.is_audio_only() {
-                base
-            } else {
-                format!("{base}-converted")
-            }
+    let mut stem = filesystem::sanitize_stem(source_title);
+    // Audio has no shape, whatever aspect was chosen before switching to it.
+    if !request.format.is_audio_only() {
+        if let Some(tag) = request.aspect.as_ref().and_then(aspect_tag) {
+            stem.push('_');
+            stem.push_str(&tag);
         }
     }
+    if let Some(range) = clip {
+        stem.push_str(&format!("_{}s", clip_seconds(range.duration())));
+    }
+    stem
+}
+
+/// `16:9` → `169`, freeform → `1080x1350`; nothing for Original.
+fn aspect_tag(aspect: &AspectSpec) -> Option<String> {
+    if let Some((w, h)) = aspect.ratio.parts() {
+        return Some(format!("{w}{h}"));
+    }
+    match (aspect.ratio, aspect.width, aspect.height) {
+        (AspectRatio::Freeform, Some(w), Some(h)) => Some(format!("{w}x{h}")),
+        _ => None,
+    }
+}
+
+/// The clip's length in whole seconds for the name only; the trim itself keeps
+/// its full precision. A non-empty clip is never named `0s`.
+fn clip_seconds(duration: f64) -> u64 {
+    (duration.round() as u64).max(1)
 }
 
 /// Resolve where the finished file goes.
@@ -455,40 +449,128 @@ mod tests {
     }
 
     #[test]
-    fn a_compressed_image_is_marked_in_the_name() {
+    fn compression_never_changes_the_name() {
         let mut r = request("/photos/IMG_7397.HEIC", OutputFormat::Jpg);
         r.compression = Some(Compression::Balanced);
-        assert_eq!(
-            suggested_filename(&r, "IMG_7397.HEIC"),
-            "IMG_7397-compressed.jpg"
-        );
+        assert_eq!(suggested_filename(&r, "IMG_7397.HEIC"), "IMG_7397.jpg");
+        r.aspect = ratio(AspectRatio::R4x5);
+        assert_eq!(suggested_filename(&r, "IMG_7397.HEIC"), "IMG_7397_45.jpg");
+    }
+
+    fn clip(start: &str, end: &str) -> Option<ClipSpec> {
+        Some(ClipSpec {
+            start: start.into(),
+            end: end.into(),
+        })
+    }
+
+    fn ratio(ratio: AspectRatio) -> Option<AspectSpec> {
+        Some(AspectSpec {
+            ratio,
+            ..AspectSpec::default()
+        })
+    }
+
+    fn named(r: &ExportRequest) -> String {
+        suggested_filename(r, "carti.mov")
     }
 
     #[test]
-    fn a_trimmed_local_file_is_marked_in_the_name() {
-        let mut r = request("/clips/ScreenRecording.mov", OutputFormat::Mp4);
-        r.clip = Some(ClipSpec {
-            start: "00:02.000".into(),
-            end: "00:05.000".into(),
+    fn an_unmodified_export_is_named_after_its_source() {
+        assert_eq!(named(&request("/v/carti.mov", OutputFormat::Mp4)), "carti.mp4");
+        // Original is a default, not a modifier.
+        let mut r = request("/v/carti.mov", OutputFormat::Mp4);
+        r.aspect = ratio(AspectRatio::Original);
+        assert_eq!(named(&r), "carti.mp4");
+    }
+
+    #[test]
+    fn a_trim_is_named_by_the_clip_length_not_its_timestamps() {
+        let mut r = request("/v/carti.mov", OutputFormat::Mp4);
+        r.clip = clip("00:43.000", "00:58.000");
+        assert_eq!(named(&r), "carti_15s.mp4");
+        r.clip = clip("00:00.000", "01:00.000");
+        assert_eq!(named(&r), "carti_60s.mp4");
+    }
+
+    #[test]
+    fn an_aspect_is_named_compactly_before_the_duration() {
+        let mut r = request("/v/carti.mov", OutputFormat::Mp4);
+        r.aspect = ratio(AspectRatio::R16x9);
+        assert_eq!(named(&r), "carti_169.mp4");
+        r.clip = clip("00:10.000", "00:25.000");
+        assert_eq!(named(&r), "carti_169_15s.mp4");
+        r.aspect = ratio(AspectRatio::R9x16);
+        r.clip = clip("00:00.000", "00:30.000");
+        assert_eq!(named(&r), "carti_916_30s.mp4");
+        r.aspect = ratio(AspectRatio::R4x5);
+        r.clip = None;
+        assert_eq!(named(&r), "carti_45.mp4");
+        r.aspect = ratio(AspectRatio::R4x3);
+        assert_eq!(named(&r), "carti_43.mp4");
+    }
+
+    #[test]
+    fn a_loop_uses_the_same_names() {
+        let mut r = request("/v/carti.mov", OutputFormat::Gif);
+        r.aspect = ratio(AspectRatio::R1x1);
+        r.clip = clip("00:05.000", "00:15.000");
+        assert_eq!(named(&r), "carti_11_10s.gif");
+    }
+
+    #[test]
+    fn a_freeform_size_is_named_by_its_pixels() {
+        let mut r = request("/v/carti.mov", OutputFormat::Mp4);
+        r.aspect = Some(AspectSpec {
+            ratio: AspectRatio::Freeform,
+            frame: FrameMode::Fit,
+            width: Some(1080),
+            height: Some(1350),
         });
+        r.clip = clip("00:00.000", "00:15.000");
+        assert_eq!(named(&r), "carti_1080x1350_15s.mp4");
+    }
+
+    #[test]
+    fn audio_names_carry_the_trim_but_never_an_aspect() {
+        let mut r = request("/v/carti.mov", OutputFormat::Mp3);
+        r.aspect = ratio(AspectRatio::R16x9);
+        r.clip = clip("00:43.000", "00:58.000");
+        assert_eq!(named(&r), "carti_15s.mp3");
+    }
+
+    #[test]
+    fn a_fractional_clip_is_rounded_for_the_name_only() {
+        let mut r = request("/v/carti.mov", OutputFormat::Mp4);
+        r.clip = clip("00:01.250", "00:15.900");
+        assert_eq!(named(&r), "carti_15s.mp4");
+        // The request itself keeps the exact boundaries.
+        let spec = r.clip.as_ref().unwrap();
+        let range = validation::validate_clip(&spec.start, &spec.end, None).unwrap();
+        assert!((range.duration() - 14.65).abs() < 1e-9);
+        // Shorter than half a second is still a clip, not `0s`.
+        r.clip = clip("00:01.000", "00:01.200");
+        assert_eq!(named(&r), "carti_1s.mp4");
+    }
+
+    #[test]
+    fn the_stem_is_sanitized_as_before() {
+        let r = request("/v/Carti Live!.mp4", OutputFormat::Mp4);
         assert_eq!(
-            suggested_filename(&r, "ScreenRecording.mov"),
-            "ScreenRecording-trimmed.mp4"
+            suggested_filename(&r, "Carti Live!.mp4"),
+            format!("{}.mp4", filesystem::sanitize_stem("Carti Live!"))
         );
     }
 
     #[test]
-    fn a_url_clip_carries_its_range() {
+    fn a_url_title_takes_the_same_suffixes() {
         let r = ExportRequest {
             input: InputSpec::Url {
-                url: "https://example.com/x".into(),
+                url: "https://example.com/x?id=123".into(),
                 quality: None,
             },
             format: OutputFormat::Mp3,
-            clip: Some(ClipSpec {
-                start: "02:52.000".into(),
-                end: "02:56.000".into(),
-            }),
+            clip: clip("02:52.000", "02:56.000"),
             output_dir: None,
             compression: None,
             loop_size: None,
@@ -496,10 +578,14 @@ mod tests {
             sound_enabled: true,
             destination_path: None,
         };
-        assert_eq!(
-            suggested_filename(&r, "The Sopranos"),
-            "The-Sopranos-02m52s-02m56s.mp3"
-        );
+        assert_eq!(suggested_filename(&r, "The Sopranos"), "The-Sopranos_4s.mp3");
+    }
+
+    #[test]
+    fn an_image_takes_the_aspect() {
+        let mut r = request("/photos/photo.HEIC", OutputFormat::Jpg);
+        r.aspect = ratio(AspectRatio::R4x5);
+        assert_eq!(suggested_filename(&r, "photo.HEIC"), "photo_45.jpg");
     }
 }
 

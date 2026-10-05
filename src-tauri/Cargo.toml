@@ -1,6 +1,6 @@
 [package]
 name = "shift"
-version = "1.1.0"
+version = "1.1.1"
 description = "SHIFT — anything in, anything out."
 authors = ["SHIFT"]
 edition = "2021"

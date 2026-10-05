@@ -81,3 +81,60 @@ test("loading a new video resets sound to on", async () => {
   await waitFor(() => expect(result.current.localMedia?.path).toBe("/second.mp4"));
   expect(result.current.soundEnabled).toBe(true);
 });
+
+test("Download and Edit show one sound state, and either can change it", async () => {
+  const { SourceResult } = await import("../src/features/input/SourceResult");
+  const { EditHeader } = await import("../src/features/edit/EditView");
+  const { ViewProvider } = await import("../src/state/view");
+  vi.mocked(ipc.analyzeFile).mockResolvedValueOnce(video("/carti.mp4", true));
+  let shift!: ReturnType<typeof useShift>;
+  const Probe = () => {
+    shift = useShift();
+    return null;
+  };
+  render(
+    <ShiftProvider>
+      <ViewProvider>
+        <Probe />
+        <div data-testid="download"><SourceResult /></div>
+        <div data-testid="edit"><EditHeader /></div>
+      </ViewProvider>
+    </ShiftProvider>,
+  );
+  act(() => shift.acceptPaths(["/carti.mp4"]));
+  const download = await screen.findByTestId("download");
+  const edit = screen.getByTestId("edit");
+  const within = (el: HTMLElement, name: string) =>
+    Array.from(el.querySelectorAll("button")).find((b) => b.textContent?.includes(name));
+
+  await waitFor(() => expect(within(download, "ON")).toBeTruthy());
+  fireEvent.click(within(download, "ON")!);
+  expect(shift.soundEnabled).toBe(false);
+  expect(within(edit, "OFF")).toBeTruthy();
+
+  fireEvent.click(within(edit, "OFF")!);
+  expect(shift.soundEnabled).toBe(true);
+  expect(within(download, "ON")).toBeTruthy();
+});
+
+test("a silent video says so on Download instead of offering a switch", async () => {
+  const { SourceResult } = await import("../src/features/input/SourceResult");
+  const { ViewProvider } = await import("../src/state/view");
+  vi.mocked(ipc.analyzeFile).mockResolvedValueOnce(video("/silent.mp4", false));
+  let shift!: ReturnType<typeof useShift>;
+  const Probe = () => {
+    shift = useShift();
+    return null;
+  };
+  render(
+    <ShiftProvider>
+      <ViewProvider>
+        <Probe />
+        <SourceResult />
+      </ViewProvider>
+    </ShiftProvider>,
+  );
+  act(() => shift.acceptPaths(["/silent.mp4"]));
+  expect(await screen.findByText("No audio")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /^(ON|OFF)$/ })).toBeNull();
+});

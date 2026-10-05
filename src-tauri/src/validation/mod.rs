@@ -112,19 +112,6 @@ pub fn format_timestamp(seconds: f64) -> String {
     }
 }
 
-/// Compact form used inside generated filenames: `02m52s`.
-pub fn timestamp_tag(seconds: f64) -> String {
-    let total = seconds.max(0.0).floor() as u64;
-    let s = total % 60;
-    let m = (total / 60) % 60;
-    let h = total / 3600;
-    if h > 0 {
-        format!("{h}h{m:02}m{s:02}s")
-    } else {
-        format!("{m:02}m{s:02}s")
-    }
-}
-
 // --------------------------------------------------------------------- paths
 
 /// Accept only an existing regular file, resolved to a canonical absolute path.
@@ -326,7 +313,6 @@ mod tests {
     #[test]
     fn formats_round_trip() {
         assert_eq!(format_timestamp(172.0), "02:52.000");
-        assert_eq!(timestamp_tag(172.0), "02m52s");
         assert_eq!(format_timestamp(3661.5), "01:01:01.500");
     }
 }

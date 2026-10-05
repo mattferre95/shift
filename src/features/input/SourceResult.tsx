@@ -3,6 +3,7 @@ import { Chip } from "@/components/Chip";
 import { Field } from "@/components/Panel";
 import { exportBlocker, exportModifiers } from "@/features/export/summary";
 import { OutputChips } from "@/features/export/OutputChips";
+import { SoundControl } from "@/features/edit/SoundControl";
 import { UrlPreviewStatus } from "@/features/input/UrlPreviewStatus";
 import { HomeFrame, LinkIcon, Resolving } from "@/features/input/Home";
 import { formatDuration } from "@/lib/format";
@@ -30,7 +31,8 @@ export function SourceResult() {
   const multi = isUrl && (s.urlMedia?.mediaItems.length ?? 0) > 1;
   // A post with several items has its own view: the collection and the item.
   if (multi) return <PostView />;
-  const modifiers = exportModifiers(s);
+  // Sound has its own control on this screen, so it is not repeated below.
+  const modifiers = exportModifiers(s).filter((m) => m !== "Sound off");
   const blocker = exportBlocker(s);
 
   return (
@@ -188,6 +190,10 @@ function Actions() {
 
   return (
     <div className="flex flex-wrap items-center justify-end gap-[10px]">
+      {/* The same control and state as Edit's header, so either place can change it. */}
+      <div className="mr-auto">
+        <SoundControl />
+      </div>
       {shortcuts
         .filter((m) => available[m.id])
         .map((m) => (
