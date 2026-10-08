@@ -73,8 +73,8 @@ export const startExport = (request: ExportRequest) =>
   invoke<string>("start_export", { request });
 
 /** Filename and folder the native Save panel should open with. */
-export const savePrompt = (request: ExportRequest, sourceTitle: string) =>
-  invoke<SavePrompt>("save_prompt", { request, sourceTitle });
+export const savePrompt = (request: ExportRequest) =>
+  invoke<SavePrompt>("save_prompt", { request });
 
 export const cancelJob = (jobId: string) => invoke<boolean>("cancel_job", { jobId });
 

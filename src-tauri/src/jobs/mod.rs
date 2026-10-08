@@ -102,6 +102,13 @@ pub struct ExportRequest {
     pub input: InputSpec,
     pub format: OutputFormat,
     pub clip: Option<ClipSpec>,
+    /// Metadata from the analyzed source, shared by Save As and the job.
+    #[serde(default)]
+    pub source_title: Option<String>,
+    #[serde(default)]
+    pub source_hint: Option<String>,
+    #[serde(default)]
+    pub source_duration: Option<f64>,
     pub output_dir: Option<String>,
     /// Images only. Ignored by the audio/video pipeline.
     #[serde(default)]
@@ -348,8 +355,16 @@ fn plan_actions(
 /// done to it — `<source>_<aspect>_<duration>`, e.g. `carti_169_15s`. Only
 /// shape and length are named; compression, sound, loop size and Fill/Fit are
 /// not, and a default never is.
-fn output_stem(request: &ExportRequest, source_title: &str, clip: Option<ClipRange>) -> String {
-    let mut stem = filesystem::sanitize_stem(source_title);
+fn output_stem(
+    request: &ExportRequest,
+    source_title: &str,
+    clip: Option<ClipRange>,
+    duration: Option<f64>,
+) -> String {
+    let mut stem = match request.input {
+        InputSpec::Url { .. } => filesystem::sanitize_title_stem(source_title),
+        InputSpec::Local { .. } => filesystem::sanitize_stem(source_title),
+    };
     // Audio has no shape, whatever aspect was chosen before switching to it.
     if !request.format.is_audio_only() {
         if let Some(tag) = request.aspect.as_ref().and_then(aspect_tag) {
@@ -357,8 +372,16 @@ fn output_stem(request: &ExportRequest, source_title: &str, clip: Option<ClipRan
             stem.push_str(&tag);
         }
     }
-    if let Some(range) = clip {
-        stem.push_str(&format!("_{}s", clip_seconds(range.duration())));
+    let timed = !matches!(
+        request.format,
+        OutputFormat::Jpg | OutputFormat::Png | OutputFormat::Avif
+    );
+    if let Some(seconds) = clip
+        .map(|range| range.duration())
+        .or(duration)
+        .filter(|v| timed && v.is_finite() && *v > 0.0)
+    {
+        stem.push_str(&format!("_{}s", clip_seconds(seconds)));
     }
     stem
 }
@@ -378,6 +401,60 @@ fn aspect_tag(aspect: &AspectSpec) -> Option<String> {
 /// its full precision. A non-empty clip is never named `0s`.
 fn clip_seconds(duration: f64) -> u64 {
     (duration.round() as u64).max(1)
+}
+
+/// Select metadata before sanitizing: a real title, a meaningful hint, then
+/// an identifier from the URL. A local source always keeps its filename stem.
+fn source_name(request: &ExportRequest, analyzed_title: Option<&str>) -> String {
+    match &request.input {
+        InputSpec::Local { path } => PathBuf::from(path)
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "output".into()),
+        InputSpec::Url { url, .. } => {
+            let parsed = url::Url::parse(url).ok();
+            let identifier = parsed.as_ref().and_then(|url| {
+                url.query_pairs()
+                    .find(|(key, _)| key == "v")
+                    .map(|(_, value)| value.into_owned())
+                    .or_else(|| {
+                        url.path_segments()?
+                            .filter(|part| !part.is_empty())
+                            .next_back()
+                            .map(str::to_owned)
+                    })
+            });
+            let useful = |value: &str| {
+                let trimmed = value.trim();
+                !trimmed.is_empty()
+                    && !trimmed.starts_with("http://")
+                    && !trimmed.starts_with("https://")
+                    && !trimmed.to_ascii_lowercase().ends_with(" post")
+                    && !trimmed.to_ascii_lowercase().ends_with("-post")
+                    && !trimmed.to_ascii_lowercase().contains("-post.")
+                    && identifier.as_deref() != Some(trimmed)
+                    && filesystem::sanitize_title_stem(trimmed) != "shift-output"
+            };
+            request
+                .source_title
+                .as_deref()
+                .filter(|title| useful(title))
+                .or_else(|| analyzed_title.filter(|title| useful(title)))
+                .map(str::to_owned)
+                .or_else(|| {
+                    request.source_hint.as_deref().and_then(|hint| {
+                        let stem = std::path::Path::new(hint).file_stem()?.to_str()?;
+                        let generic = stem.to_ascii_lowercase();
+                        (useful(stem)
+                            && !generic.ends_with("-post")
+                            && !generic.contains("-post-"))
+                        .then(|| stem.to_owned())
+                    })
+                })
+                .or(identifier)
+                .unwrap_or_else(|| "media".into())
+        }
+    }
 }
 
 /// Resolve where the finished file goes.
@@ -402,24 +479,14 @@ fn resolve_destination(
 
 /// The filename SHIFT would choose, used to prefill the Save panel. Naming
 /// rules stay here so the frontend never has to reimplement them.
-pub fn suggested_filename(request: &ExportRequest, source_title: &str) -> String {
+pub fn suggested_filename(request: &ExportRequest) -> String {
     let clip = request
         .clip
         .as_ref()
         .and_then(|c| validation::validate_clip(&c.start, &c.end, None).ok());
 
-    // For a local file the stem comes from the path, exactly as the job itself
-    // derives it — the caller's title still carries the extension. Only a URL
-    // needs the title passed in, since re-fetching it here would be wasteful.
-    let title = match &request.input {
-        InputSpec::Local { path } => PathBuf::from(path)
-            .file_stem()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| source_title.to_string()),
-        InputSpec::Url { .. } => source_title.to_string(),
-    };
-
-    let stem = output_stem(request, &title, clip);
+    let title = source_name(request, None);
+    let stem = output_stem(request, &title, clip, request.source_duration);
     format!("{stem}.{}", request.format.ext())
 }
 
@@ -432,6 +499,9 @@ mod tests {
             input: InputSpec::Local { path: path.into() },
             format,
             clip: None,
+            source_title: None,
+            source_hint: None,
+            source_duration: None,
             output_dir: None,
             compression: None,
             loop_size: None,
@@ -445,16 +515,16 @@ mod tests {
     fn a_local_suggestion_drops_the_source_extension() {
         // The UI passes the display name, which still has ".HEIC" on it.
         let r = request("/photos/IMG_7397.HEIC", OutputFormat::Jpg);
-        assert_eq!(suggested_filename(&r, "IMG_7397.HEIC"), "IMG_7397.jpg");
+        assert_eq!(suggested_filename(&r), "IMG_7397.jpg");
     }
 
     #[test]
     fn compression_never_changes_the_name() {
         let mut r = request("/photos/IMG_7397.HEIC", OutputFormat::Jpg);
         r.compression = Some(Compression::Balanced);
-        assert_eq!(suggested_filename(&r, "IMG_7397.HEIC"), "IMG_7397.jpg");
+        assert_eq!(suggested_filename(&r), "IMG_7397.jpg");
         r.aspect = ratio(AspectRatio::R4x5);
-        assert_eq!(suggested_filename(&r, "IMG_7397.HEIC"), "IMG_7397_45.jpg");
+        assert_eq!(suggested_filename(&r), "IMG_7397_45.jpg");
     }
 
     fn clip(start: &str, end: &str) -> Option<ClipSpec> {
@@ -472,7 +542,7 @@ mod tests {
     }
 
     fn named(r: &ExportRequest) -> String {
-        suggested_filename(r, "carti.mov")
+        suggested_filename(r)
     }
 
     #[test]
@@ -557,7 +627,7 @@ mod tests {
     fn the_stem_is_sanitized_as_before() {
         let r = request("/v/Carti Live!.mp4", OutputFormat::Mp4);
         assert_eq!(
-            suggested_filename(&r, "Carti Live!.mp4"),
+            suggested_filename(&r),
             format!("{}.mp4", filesystem::sanitize_stem("Carti Live!"))
         );
     }
@@ -571,6 +641,9 @@ mod tests {
             },
             format: OutputFormat::Mp3,
             clip: clip("02:52.000", "02:56.000"),
+            source_title: Some("The Sopranos".into()),
+            source_hint: None,
+            source_duration: None,
             output_dir: None,
             compression: None,
             loop_size: None,
@@ -578,14 +651,87 @@ mod tests {
             sound_enabled: true,
             destination_path: None,
         };
-        assert_eq!(suggested_filename(&r, "The Sopranos"), "The-Sopranos_4s.mp3");
+        assert_eq!(suggested_filename(&r), "The_Sopranos_4s.mp3");
     }
 
     #[test]
     fn an_image_takes_the_aspect() {
         let mut r = request("/photos/photo.HEIC", OutputFormat::Jpg);
         r.aspect = ratio(AspectRatio::R4x5);
-        assert_eq!(suggested_filename(&r, "photo.HEIC"), "photo_45.jpg");
+        assert_eq!(suggested_filename(&r), "photo_45.jpg");
+    }
+
+    #[test]
+    fn url_title_wins_over_hint_and_identifier_for_full_and_trimmed_exports() {
+        let mut r = request("/unused", OutputFormat::Mp4);
+        r.input = InputSpec::Url {
+            url: "https://www.youtube.com/watch?v=8m91-gu-x8U".into(),
+            quality: None,
+        };
+        r.source_title = Some("Empty Room Ambient Noise Sound Effect".into());
+        r.source_hint = Some("youtube-post.mp4".into());
+        r.source_duration = Some(60.0);
+        assert_eq!(named(&r), "Empty_Room_Ambient_Noise_Sound_Effect_60s.mp4");
+
+        r.format = OutputFormat::Mp3;
+        assert_eq!(named(&r), "Empty_Room_Ambient_Noise_Sound_Effect_60s.mp3");
+        r.format = OutputFormat::Mp4;
+        r.aspect = ratio(AspectRatio::R9x16);
+        assert_eq!(named(&r), "Empty_Room_Ambient_Noise_Sound_Effect_916_60s.mp4");
+        r.source_duration = Some(300.0);
+        r.clip = clip("01:00.000", "01:15.000");
+        assert_eq!(named(&r), "Empty_Room_Ambient_Noise_Sound_Effect_916_15s.mp4");
+    }
+
+    #[test]
+    fn full_local_video_and_audio_use_known_duration() {
+        let mut r = request("/v/carti.mov", OutputFormat::Mp4);
+        r.source_duration = Some(120.0);
+        assert_eq!(named(&r), "carti_120s.mp4");
+        r.source_duration = Some(90.0);
+        assert_eq!(named(&r), "carti_90s.mp4");
+        r.source_duration = Some(125.0);
+        assert_eq!(named(&r), "carti_125s.mp4");
+        r.source_duration = Some(0.2);
+        assert_eq!(named(&r), "carti_1s.mp4");
+        r.clip = clip("00:20.000", "00:35.000");
+        assert_eq!(named(&r), "carti_15s.mp4");
+        r.clip = None;
+        r.format = OutputFormat::Mp3;
+        r.source_duration = Some(60.0);
+        r.aspect = ratio(AspectRatio::R9x16);
+        assert_eq!(named(&r), "carti_60s.mp3");
+        r.input = InputSpec::Local { path: "/v/ambient.wav".into() };
+        r.source_duration = Some(180.0);
+        assert_eq!(named(&r), "ambient_180s.mp3");
+    }
+
+    #[test]
+    fn still_images_have_no_duration_even_with_metadata() {
+        let mut r = request("/photos/photo.HEIC", OutputFormat::Jpg);
+        r.source_duration = Some(60.0);
+        // The UI sends no duration for stills; the native suggestion also
+        // ignores stray duration metadata for a still output.
+        assert_eq!(named(&r), "photo.jpg");
+        r.aspect = ratio(AspectRatio::R4x5);
+        assert_eq!(named(&r), "photo_45.jpg");
+    }
+
+    #[test]
+    fn messy_url_titles_are_normalized_and_missing_titles_use_safe_fallbacks() {
+        let mut r = request("/unused", OutputFormat::Mp4);
+        r.input = InputSpec::Url {
+            url: "https://www.youtube.com/watch?v=8m91-gu-x8U".into(),
+            quality: None,
+        };
+        r.source_duration = Some(60.0);
+        r.source_title = Some("Empty Room: Ambient / Noise | Sound Effect!".into());
+        assert_eq!(named(&r), "Empty_Room_Ambient_Noise_Sound_Effect_60s.mp4");
+        r.source_title = Some("YouTube post".into());
+        r.source_hint = Some("youtube-post.mp4".into());
+        assert_eq!(named(&r), "8m91_gu_x8U_60s.mp4");
+        r.source_hint = Some("A useful caption.mp4".into());
+        assert_eq!(named(&r), "A_useful_caption_60s.mp4");
     }
 }
 
@@ -711,7 +857,7 @@ fn execute(
     };
 
     let (actions, stages) = plan_actions(request, clip);
-    let stem = output_stem(request, &source_title, clip);
+    let stem = output_stem(request, &source_name(request, Some(&source_title)), clip, duration);
     let destination = resolve_destination(request, &output_dir, &stem)?;
     let filename = destination
         .file_name()
@@ -889,11 +1035,7 @@ fn execute_image(
     let probe = image::probe(&resolved, cancel)?;
     let compression = request.compression.unwrap_or(Compression::None);
 
-    let stem_source = resolved
-        .file_stem()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_else(|| "image".into());
-    let stem = output_stem(request, &stem_source, None);
+    let stem = output_stem(request, &source_name(request, None), None, None);
     let destination = resolve_destination(request, output_dir, &stem)?;
 
     let work_dir = temp.sub("out")?;

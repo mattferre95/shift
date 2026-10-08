@@ -78,37 +78,48 @@ pub fn prune_stale_temp_dirs() {
 /// Strips path separators and control characters, collapses whitespace to
 /// single hyphens, and keeps the result short enough to survive suffixes.
 pub fn sanitize_stem(raw: &str) -> String {
+    sanitize_with_separator(raw, '-')
+}
+
+/// The same filesystem rules, with underscores for analyzed media titles.
+pub fn sanitize_title_stem(raw: &str) -> String {
+    sanitize_with_separator(raw, '_')
+}
+
+fn sanitize_with_separator(raw: &str, separator: char) -> String {
     let mut out = String::with_capacity(raw.len());
-    let mut last_dash = false;
+    let mut last_separator = false;
     for ch in raw.chars() {
         let mapped = match ch {
-            'a'..='z' | 'A'..='Z' | '0'..='9' | '_' | '(' | ')' | '[' | ']' => Some(ch),
-            ' ' | '-' | '\t' => Some('-'),
+            'a'..='z' | 'A'..='Z' | '0'..='9' => Some(ch),
+            '_' if separator == '-' => Some('_'),
+            '(' | ')' | '[' | ']' if separator == '-' => Some(ch),
+            ' ' | '-' | '_' | '\t' => Some(separator),
             _ if ch.is_alphanumeric() => Some(ch),
             _ => None,
         };
         match mapped {
-            Some('-') => {
-                if !last_dash && !out.is_empty() {
-                    out.push('-');
-                    last_dash = true;
+            Some(c) if c == separator => {
+                if !last_separator && !out.is_empty() {
+                    out.push(separator);
+                    last_separator = true;
                 }
             }
             Some(c) => {
                 out.push(c);
-                last_dash = false;
+                last_separator = false;
             }
             None => {
-                if !last_dash && !out.is_empty() {
-                    out.push('-');
-                    last_dash = true;
+                if !last_separator && !out.is_empty() {
+                    out.push(separator);
+                    last_separator = true;
                 }
             }
         }
     }
-    let trimmed = out.trim_matches(|c| c == '-' || c == '.').to_string();
+    let trimmed = out.trim_matches(|c| c == separator || c == '.').to_string();
     let trimmed = if trimmed.chars().count() > 80 {
-        trimmed.chars().take(80).collect::<String>().trim_end_matches('-').to_string()
+        trimmed.chars().take(80).collect::<String>().trim_end_matches(separator).to_string()
     } else {
         trimmed
     };
@@ -171,6 +182,9 @@ mod tests {
         assert_eq!(sanitize_stem(""), "shift-output");
         assert_eq!(sanitize_stem("///"), "shift-output");
         assert!(sanitize_stem(&"x".repeat(300)).chars().count() <= 80);
+        assert_eq!(sanitize_title_stem("Carti - Live @ Paris!"), "Carti_Live_Paris");
+        assert_eq!(sanitize_title_stem("THE SOPRANOS | Best Scene"), "THE_SOPRANOS_Best_Scene");
+        assert_eq!(sanitize_title_stem("Café  /  été"), "Café_été");
     }
 
     #[test]

@@ -269,6 +269,9 @@ export interface ExportRequest {
   input: ExportInput;
   format: OutputFormat;
   clip: { start: string; end: string } | null;
+  sourceTitle: string | null;
+  sourceHint: string | null;
+  sourceDuration: number | null;
   outputDir: string | null;
   /** Images only; ignored by the audio/video pipeline. */
   compression: Compression | null;

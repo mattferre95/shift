@@ -359,8 +359,7 @@ pub fn start_export(app: AppHandle, request: ExportRequest) -> Result<String> {
 /// What the Save panel should be prefilled with.
 ///
 /// The naming rules live in the jobs layer and are not duplicated in the
-/// frontend; `source_title` is the title or filename the UI already has from
-/// analysis, so no source is re-fetched to answer this.
+/// frontend. The request carries analyzed metadata, so no source is re-fetched.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SavePrompt {
@@ -373,10 +372,9 @@ pub struct SavePrompt {
 pub fn save_prompt(
     settings: State<'_, SettingsStore>,
     request: ExportRequest,
-    source_title: String,
 ) -> SavePrompt {
     SavePrompt {
-        filename: jobs::suggested_filename(&request, &source_title),
+        filename: jobs::suggested_filename(&request),
         directory: settings.default_output_dir().to_string_lossy().to_string(),
     }
 }

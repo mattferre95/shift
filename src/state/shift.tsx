@@ -683,6 +683,9 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
       input,
       format: s.format,
       clip: s.clipEnabled && !isImage ? { start: s.clipIn, end: s.clipOut } : null,
+      sourceTitle: item ? s.urlMedia?.title ?? null : null,
+      sourceHint: item?.filenameHint ?? null,
+      sourceDuration: isImage ? null : duration,
       outputDir: s.outputDir || null,
       compression: isImage ? s.compression : null,
       loopSize: isLoop ? s.loopSize : null,
@@ -695,12 +698,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
     try {
       // The backend owns the naming rules, so the panel is prefilled from it
       // rather than from a second copy of them over here.
-      const sourceTitle =
-        item?.filenameHint?.replace(/\.[^.]+$/, "") ??
-        s.urlMedia?.title ??
-        s.localMedia?.name ??
-        "";
-      const prompt = await ipc.savePrompt(request, sourceTitle);
+      const prompt = await ipc.savePrompt(request);
 
       const { save } = await import("@tauri-apps/plugin-dialog");
       const ext = s.format.toLowerCase();
@@ -726,7 +724,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
     } finally {
       setSaving(false);
     }
-  }, [canExport, saving, s.urlMedia, s.selectedMediaIds, activeMedia, s.localMedia, s.quality, s.format, s.soundEnabled, s.clipEnabled, s.clipIn, s.clipOut, s.outputDir, s.compression, s.loopSize, s.aspect, isImage, isLoop, showAspect, patch]);
+  }, [canExport, saving, s.urlMedia, s.selectedMediaIds, activeMedia, s.localMedia, s.quality, s.format, s.soundEnabled, s.clipEnabled, s.clipIn, s.clipOut, s.outputDir, s.compression, s.loopSize, s.aspect, duration, isImage, isLoop, showAspect, patch]);
 
   const cancel = useCallback(() => {
     const id = s.job?.id ?? jobRef.current;
