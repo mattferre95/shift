@@ -10,7 +10,7 @@
 //! is ever built from user input.
 
 use crate::errors::{Result, ShiftError};
-use crate::media::aspect::{self, AspectSpec, PadColor};
+use crate::media::aspect::{self, AspectSpec, PadColor, Reframe};
 use crate::media::profiles::OutputFormat;
 use crate::process::{run_capture, Binary, CancelToken};
 use serde::{Deserialize, Serialize};
@@ -236,7 +236,7 @@ pub fn build_plan(
         let chain = r.filters_with(pad).join(",");
         let alpha = has_alpha || pad == PadColor::Transparent;
         steps.push(ImageStep::Ffmpeg(reframe_args(&input, &chain, alpha, &framed)));
-        labels.push("Reframing…".into());
+        labels.push(reframe_label(&r).into());
         input = framed;
         src = "png".into();
     }
@@ -319,6 +319,15 @@ pub fn build_plan(
 /// transparent source outright. JPEG has never had an alpha channel.
 pub fn keeps_alpha(format: OutputFormat) -> bool {
     matches!(format, OutputFormat::Png | OutputFormat::Webp)
+}
+
+/// What the reframe pass is called while it runs: only what it really does.
+fn reframe_label(r: &Reframe) -> &'static str {
+    match (r.reshapes(), r.flip.any()) {
+        (true, true) => "Transforming…",
+        (false, true) => "Flipping…",
+        _ => "Reframing…",
+    }
 }
 
 /// The reframe pass: crop/scale/pad into a lossless PNG the normal conversion
@@ -424,6 +433,27 @@ fn png_optimize_args(input: &Path, output: &Path) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_reframe_stage_names_only_what_it_does() {
+        use crate::media::aspect::{AspectRatio, Flip};
+        let label = |ratio, flip| {
+            let spec = AspectSpec { ratio, flip, ..AspectSpec::default() };
+            build_plan(
+                Path::new("/in.png"), "png", OutputFormat::Png, Compression::None, false,
+                (1200, 800), &spec, Path::new("/work"), Path::new("/out.png"),
+            )
+            .unwrap()
+            .labels[0]
+            .clone()
+        };
+        let h = Flip { horizontal: true, vertical: false };
+        let both = Flip { horizontal: true, vertical: true };
+        assert_eq!(label(AspectRatio::R1x1, Flip::default()), "Reframing…");
+        assert_eq!(label(AspectRatio::Original, h), "Flipping…");
+        assert_eq!(label(AspectRatio::Original, both), "Flipping…");
+        assert_eq!(label(AspectRatio::R1x1, h), "Transforming…");
+    }
 
     fn plan(src: &str, format: OutputFormat, c: Compression) -> ImagePlan {
         build_plan(

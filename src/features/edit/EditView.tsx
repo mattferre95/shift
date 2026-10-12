@@ -9,6 +9,7 @@ import { OutputChips } from "@/features/export/OutputChips";
 import { sourceMeta, sourceName } from "@/features/input/sourceMeta";
 import { TrimPlayer } from "@/features/input/TrimPlayer";
 import { useShift } from "@/state/shift";
+import { flipStyle } from "@/features/resize/framing";
 import { isAudioFormat } from "@/types";
 import { LoopField } from "@/features/export/LoopField";
 
@@ -69,7 +70,8 @@ function TrimOff() {
     <div className="flex min-h-0 flex-1 flex-col gap-3">
       <div className="relative flex min-h-[130px] flex-1 items-center justify-center overflow-hidden rounded-[14px] border border-[var(--hairline)] bg-black">
         {s.previewImage && !audioOnly ? (
-          <img src={s.previewImage} alt="" draggable={false} className="h-full w-full object-contain" />
+          <img src={s.previewImage} alt="" draggable={false} className="h-full w-full object-contain"
+            style={{ transform: s.showAspect ? flipStyle(s.flip) : undefined }} />
         ) : (
           <span className="font-mono text-[11px] tracking-[0.06em] text-shift-quiet">
             {audioOnly ? "AUDIO" : s.previewError ? "NO PREVIEW" : "VIDEO"}

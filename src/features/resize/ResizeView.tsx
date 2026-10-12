@@ -1,10 +1,15 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { Button } from "@/components/Button";
 import { Field, Inspector, SummaryRow } from "@/components/Panel";
 import { Segmented } from "@/components/Segmented";
 import { SizeField } from "@/components/SizeField";
 import { exportActionLabel, exportBlocker, exportSettings } from "@/features/export/summary";
 import { useShift } from "@/state/shift";
+import { FlipControls } from "./FlipControls";
+import {
+  cropForSource, cropFromContent, evenCrop, flipContent, flipRect, flipStyle, mediaBox, moveCrop, resizeCrop,
+  sourceDelta, sourceHandle, type Handle,
+} from "./framing";
 import {
   ASPECT_ROWS,
   aspectLabel,
@@ -12,6 +17,8 @@ import {
   MIN_DIMENSION,
   type AspectRatio,
   type FrameMode,
+  type CropRect,
+  type Flip,
 } from "@/types";
 
 const RATIOS: AspectRatio[] = ASPECT_ROWS.flat();
@@ -19,10 +26,9 @@ const RATIOS: AspectRatio[] = ASPECT_ROWS.flat();
 /**
  * Resize: the framing stage on the left, the shape on the right.
  *
- * Every number drawn here is `aspect_preview`'s answer — the same `ContentBox`
- * the encoder is given. The stage only scales that box to fit the screen; it
- * never works out a crop or a pad of its own. Opening this view changes
- * nothing: the shape is whatever the export already holds, Original included.
+ * `aspect_preview` answers output dimensions and untouched framing. Direct
+ * manipulation updates the same source crop submitted to the Rust exporter.
+ * Opening this view changes nothing, including Original and Fit.
  */
 export function ResizeView() {
   return (
@@ -35,9 +41,9 @@ export function ResizeView() {
 
 function useSourceSize() {
   const s = useShift();
-  const w = s.playback.info?.width ?? s.localMedia?.width ?? s.activeMedia?.width ?? null;
-  const h = s.playback.info?.height ?? s.localMedia?.height ?? s.activeMedia?.height ?? null;
-  return { w, h };
+  if (s.localMedia?.width && s.localMedia.height) return { w: s.localMedia.width, h: s.localMedia.height };
+  if (s.activeMedia?.width && s.activeMedia.height) return { w: s.activeMedia.width, h: s.activeMedia.height };
+  return { w: s.playback.info?.width ?? null, h: s.playback.info?.height ?? null };
 }
 
 /** Measure an element so the stage can scale the real geometry into it. */
@@ -64,7 +70,10 @@ function FramingStage() {
   return (
     <div className="shift-panel flex min-h-0 min-w-0 flex-col overflow-hidden">
       <div ref={stageRef} className="relative min-h-[150px] flex-1 overflow-hidden" aria-label="Framing preview">
-        {stage && (original || !p ? <SourceOnly stage={stage} /> : <Framed stage={stage} />)}
+        {stage && (original || !p ? <SourceOnly stage={stage} />
+          : p.mode === "fill" && src.w && src.h && s.previewImage && !s.playback.busy
+            ? <InteractiveFill stage={stage} source={{ w: src.w, h: src.h }} />
+            : <Framed stage={stage} />)}
       </div>
 
       <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 border-t border-[var(--hairline)] px-4 py-[10px]">
@@ -107,13 +116,96 @@ function SourceOnly({ stage }: { stage: { w: number; h: number } }) {
 
   return (
     <div className="absolute inset-0 flex items-center justify-center">
-      <div className="relative overflow-hidden rounded-[4px] bg-black shadow-[0_0_0_1px_var(--hairline-bright)]" style={box}>
+      <div className={`relative overflow-hidden rounded-[4px] bg-black shadow-[0_0_0_1px_var(--hairline-bright)] ${original ? "border border-shift-accent" : ""}`} style={box}>
         {s.previewImage ? (
-          <img src={s.previewImage} alt="" draggable={false} className="h-full w-full object-contain" style={{ maxWidth: "none" }} />
+          <img src={s.previewImage} alt="" draggable={false} className="h-full w-full object-contain" style={{ maxWidth: "none", transform: flipStyle(s.flip) }} />
         ) : (
           <Placeholder text={s.previewError ?? "No preview"} />
         )}
         <FrameTag text={original ? "Original" : "Measuring…"} />
+      </div>
+    </div>
+  );
+}
+
+const HANDLES: Handle[] = ["nw", "ne", "sw", "se", "n", "s", "e", "w"];
+const CURSORS: Record<Handle, string> = {
+  nw: "nwse-resize", ne: "nesw-resize", sw: "nesw-resize", se: "nwse-resize",
+  n: "ns-resize", s: "ns-resize", e: "ew-resize", w: "ew-resize",
+};
+const HANDLE_POS: Record<Handle, { left: string; top: string }> = {
+  nw: { left: "0%", top: "0%" }, ne: { left: "100%", top: "0%" },
+  sw: { left: "0%", top: "100%" }, se: { left: "100%", top: "100%" },
+  n: { left: "50%", top: "0%" }, s: { left: "50%", top: "100%" },
+  e: { left: "100%", top: "50%" }, w: { left: "0%", top: "50%" },
+};
+
+/** Fill draws the source at its contained bounds, then reveals the selected crop. */
+function InteractiveFill({ stage, source }: { stage: { w: number; h: number }; source: { w: number; h: number } }) {
+  const s = useShift();
+  const box = mediaBox(stage, source);
+  const initial = cropFromContent(source, s.aspectPreview!.content);
+  const rect = s.aspect.crop ? cropForSource(s.aspect.crop, source) : initial;
+  const drag = useRef<{ startX: number; startY: number; rect: CropRect; handle: Handle | null; ratio: number | null; flip: Flip } | null>(null);
+  const ratio = s.aspect.ratio === "freeform"
+    ? s.aspectLocked ? rect.width / rect.height : null
+    : (() => { const [w, h] = s.aspect.ratio.split(":").map(Number); return w / h; })();
+  const sx = box.width / source.w;
+  const sy = box.height / source.h;
+  // The crop stays in source pixels; only where it is drawn follows the mirror.
+  const shown = flipRect(rect, source, s.flip);
+  const frame = { left: shown.x * sx, top: shown.y * sy, width: shown.width * sx, height: shown.height * sy };
+  const mirror = flipStyle(s.flip);
+
+  const begin = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    const handle = (event.target as HTMLElement).closest<HTMLElement>("[data-handle]")?.dataset.handle as Handle | undefined;
+    drag.current = { startX: event.clientX, startY: event.clientY, rect, handle: handle ?? null, ratio, flip: s.flip };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    event.preventDefault();
+  };
+  const move = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const start = drag.current;
+    if (!start) return;
+    // The pointer moves over the mirrored picture; the crop moves in the source.
+    const { dx, dy } = sourceDelta((event.clientX - start.startX) / sx, (event.clientY - start.startY) / sy, start.flip);
+    const next = start.handle
+      ? resizeCrop(start.rect, sourceHandle(start.handle, start.flip), dx, dy, source, start.ratio)
+      : moveCrop(start.rect, dx, dy, source);
+    s.setCropRect(evenCrop(next, source));
+  };
+  const end = (event: ReactPointerEvent<HTMLDivElement>) => {
+    drag.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+  };
+
+  return (
+    <div className="absolute inset-0">
+      <div className="absolute overflow-hidden rounded-[4px] bg-black shadow-[0_0_0_1px_var(--hairline-bright)]"
+        style={{ left: box.left, top: box.top, width: box.width, height: box.height }}>
+        <img src={s.previewImage!} alt="" draggable={false} className="absolute inset-0 h-full w-full"
+          style={{ objectFit: s.previewIsApproximate ? "cover" : "fill", transform: mirror }} />
+        <div className="absolute inset-0 bg-black/50" />
+        <div
+          aria-label="Crop frame"
+          className="absolute cursor-move overflow-visible border border-shift-accent shadow-[0_0_0_1px_var(--accent-edge)]"
+          style={{ ...frame, touchAction: "none", userSelect: "none" }}
+          onPointerDown={begin} onPointerMove={move} onPointerUp={end} onPointerCancel={end}
+        >
+          <div className="pointer-events-none absolute inset-0 overflow-hidden">
+            <img src={s.previewImage!} alt="" draggable={false} className="absolute max-w-none"
+              style={{ left: -frame.left, top: -frame.top, width: box.width, height: box.height,
+                objectFit: s.previewIsApproximate ? "cover" : "fill", transform: mirror }} />
+          </div>
+          {HANDLES.filter((handle) => s.aspect.ratio === "freeform" || handle.length === 2).map((handle) => (
+            <span key={handle} data-handle={handle} aria-label={`Resize ${handle}`}
+              className="absolute z-10 flex h-[18px] w-[18px] items-center justify-center"
+              style={{ ...HANDLE_POS[handle], transform: "translate(-50%, -50%)", cursor: CURSORS[handle] }}>
+              <span className="h-[7px] w-[7px] rounded-[2px] border border-white bg-shift-accent shadow-sm" />
+            </span>
+          ))}
+        </div>
+        <FrameTag text={`${aspectLabel(s.aspect.ratio)} · Fill`} />
       </div>
     </div>
   );
@@ -127,7 +219,10 @@ function SourceOnly({ stage }: { stage: { w: number; h: number } }) {
 function Framed({ stage }: { stage: { w: number; h: number } }) {
   const s = useShift();
   const p = s.aspectPreview!;
-  const { canvasWidth: cw, canvasHeight: ch, frameWidth: fw, frameHeight: fh, offsetX: ox, offsetY: oy } = p.content;
+  // Rust mirrors the finished canvas, padding and all, so the picture lands
+  // at the mirrored offset inside it.
+  const { canvasWidth: cw, canvasHeight: ch, frameWidth: fw, frameHeight: fh, offsetX: ox, offsetY: oy } =
+    flipContent(p.content, s.flip);
 
   // The drawing is the union of canvas and picture, so a Fill crop has room to
   // show what it removes. Only a display scale is applied to these numbers.
@@ -146,6 +241,7 @@ function Framed({ stage }: { stage: { w: number; h: number } }) {
     maxHeight: "none",
     // A stand-in poster may not share the source's shape; the real frame does.
     objectFit: s.previewIsApproximate ? ("cover" as const) : ("fill" as const),
+    transform: flipStyle(s.flip),
   };
 
   return (
@@ -270,6 +366,10 @@ function ResizeInspector() {
           </div>
         </Field>
       )}
+
+      <Field label="Flip">
+        <FlipControls />
+      </Field>
 
       {a.ratio === "freeform" && (
         <Field label="Output size">

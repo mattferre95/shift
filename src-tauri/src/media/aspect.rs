@@ -84,6 +84,54 @@ pub struct AspectSpec {
     pub width: Option<u32>,
     #[serde(default)]
     pub height: Option<u32>,
+    /// Explicit source-pixel crop. Absent until the user manipulates Fill.
+    #[serde(default)]
+    pub crop: Option<CropRect>,
+    /// Mirroring, independent of ratio and crop. Valid with Original too.
+    #[serde(default)]
+    pub flip: Flip,
+}
+
+/// Mirror the finished frame. Applied after every crop, scale and pad, so a
+/// crop stays expressed in the unflipped source's own pixels.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Flip {
+    #[serde(default)]
+    pub horizontal: bool,
+    #[serde(default)]
+    pub vertical: bool,
+}
+
+impl Flip {
+    pub fn any(self) -> bool {
+        self.horizontal || self.vertical
+    }
+
+    /// `hflip` then `vflip`, each at most once.
+    pub fn filters(self) -> Vec<String> {
+        let mut out = Vec::new();
+        if self.horizontal {
+            out.push("hflip".into());
+        }
+        if self.vertical {
+            out.push("vflip".into());
+        }
+        out
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CropRect {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+    #[serde(default)]
+    pub source_width: u32,
+    #[serde(default)]
+    pub source_height: u32,
 }
 
 impl Default for AspectSpec {
@@ -93,6 +141,8 @@ impl Default for AspectSpec {
             frame: FrameMode::Fill,
             width: None,
             height: None,
+            crop: None,
+            flip: Flip::default(),
         }
     }
 }
@@ -100,6 +150,11 @@ impl Default for AspectSpec {
 impl AspectSpec {
     pub fn is_original(&self) -> bool {
         self.ratio == AspectRatio::Original
+    }
+
+    /// Whether a visual export has anything to do: a shape or a mirror.
+    pub fn transforms(&self) -> bool {
+        !self.is_original() || self.flip.any()
     }
 }
 
@@ -137,9 +192,7 @@ impl PadColor {
 /// resize scales canvas and content together, so proportions — which is all a
 /// preview needs — are identical either way.
 ///
-/// This is also the seam a draggable crop would use later: moving the source
-/// inside the frame is a change to `offset`, and nothing else here would need
-/// to know.
+/// A manual crop supplies the offset directly from its source-pixel origin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContentBox {
@@ -169,6 +222,10 @@ pub struct Reframe {
     /// True when the source had to be enlarged to satisfy the request. Only
     /// reachable from Freeform, and surfaced to the user.
     pub upscales: bool,
+    /// Crop origin in source pixels when framing was moved by the user.
+    pub crop_origin: Option<(u32, u32)>,
+    /// Mirroring of the finished frame, after every shape filter.
+    pub flip: Flip,
 }
 
 /// Round to an even number, because yuv420p chroma is subsampled by two and
@@ -192,6 +249,8 @@ pub fn identity(source: (u32, u32)) -> Reframe {
         post: None,
         mode: FrameMode::Fill,
         upscales: false,
+        crop_origin: None,
+        flip: Flip::default(),
     }
 }
 
@@ -204,6 +263,11 @@ impl Reframe {
     /// empty filter graph and fail.
     pub fn is_identity(&self) -> bool {
         self.filters().is_empty()
+    }
+
+    /// Whether the shape changes, as opposed to only being mirrored.
+    pub fn reshapes(&self) -> bool {
+        !self.shape_filters(PadColor::Black).is_empty()
     }
 
     /// The size the finished frame actually is.
@@ -223,11 +287,10 @@ impl Reframe {
             canvas_height: ch,
             frame_width: fw,
             frame_height: fh,
-            // Centred. Integer division here rather than an FFmpeg expression
-            // so the number the preview draws with is the number the encoder
-            // is given — see `filters_with`.
-            offset_x: (cw as i64 - fw as i64) / 2,
-            offset_y: (ch as i64 - fh as i64) / 2,
+            // Untouched presets are centred. A manual crop uses its requested
+            // origin. Both offsets are passed literally to FFmpeg.
+            offset_x: self.crop_origin.map_or((cw as i64 - fw as i64) / 2, |(x, _)| -(x as i64)),
+            offset_y: self.crop_origin.map_or((ch as i64 - fh as i64) / 2, |(_, y)| -(y as i64)),
         }
     }
 
@@ -301,8 +364,16 @@ impl Reframe {
         self.filters_with(PadColor::Black)
     }
 
-    /// The FFmpeg filter chain, in the order it must run.
+    /// The FFmpeg filter chain, in the order it must run: the shape, then the
+    /// mirror. Flipping last keeps the crop in unflipped source pixels and
+    /// leaves Fit's padding where `content_box` says, mirrored with the rest.
     pub fn filters_with(&self, pad: PadColor) -> Vec<String> {
+        let mut out = self.shape_filters(pad);
+        out.extend(self.flip.filters());
+        out
+    }
+
+    fn shape_filters(&self, pad: PadColor) -> Vec<String> {
         let mut out = Vec::new();
         if let Some((w, h)) = self.scale {
             if (w, h) != self.source {
@@ -315,7 +386,7 @@ impl Reframe {
             }
         }
         let incoming = self.incoming();
-        if incoming != self.canvas {
+        if incoming != self.canvas || self.crop_origin.is_some_and(|(x, y)| x != 0 || y != 0) {
             let (w, h) = self.canvas;
             let b = self.content_box();
             match self.mode {
@@ -327,6 +398,9 @@ impl Reframe {
                 // provably the same framing.
                 FrameMode::Fill => {
                     out.push(format!("crop={w}:{h}:{}:{}", -b.offset_x, -b.offset_y));
+                    if self.crop_origin.is_some() {
+                        out.push("setsar=1".into());
+                    }
                 }
                 FrameMode::Fit => {
                     // The format conversion is not decoration. Asked to pad
@@ -359,6 +433,23 @@ impl Reframe {
 /// Returns `None` when there is nothing to do, so callers can keep their
 /// stream-copy fast paths.
 pub fn resolve(source: (u32, u32), spec: &AspectSpec) -> Result<Option<Reframe>> {
+    let shaped = shape(source, spec)?;
+    if !spec.flip.any() {
+        return Ok(shaped);
+    }
+    // A mirror needs no measurements, so Original with an unreadable size
+    // still flips.
+    let mut r = shaped.unwrap_or_else(|| identity(source));
+    r.flip = spec.flip;
+    Ok(Some(r))
+}
+
+fn shape(source: (u32, u32), spec: &AspectSpec) -> Result<Option<Reframe>> {
+    if spec.frame == FrameMode::Fill && spec.ratio != AspectRatio::Original {
+        if let Some(crop) = spec.crop {
+            return Ok(non_trivial(manual_crop(source, spec, crop)?));
+        }
+    }
     // Checked inside the arms, not before them: Original is defined without
     // reference to the source's size, so an unreadable size must not stop it.
     match spec.ratio {
@@ -377,6 +468,58 @@ pub fn resolve(source: (u32, u32), spec: &AspectSpec) -> Result<Option<Reframe>>
             Ok(non_trivial(preset(source, rw, rh, spec.frame)))
         }
     }
+}
+
+fn manual_crop(source: (u32, u32), spec: &AspectSpec, crop: CropRect) -> Result<Reframe> {
+    measurable(source)?;
+    let crop = if crop.source_width > 0 && crop.source_height > 0 {
+        let mapped = |value: u32, from: u32, to: u32| -> u32 {
+            let pixels = (value as f64 * to as f64 / from as f64).round() as u32;
+            pixels - pixels % 2
+        };
+        let width = mapped(crop.width, crop.source_width, source.0).max(MIN_DIMENSION);
+        let height = mapped(crop.height, crop.source_height, source.1).max(MIN_DIMENSION);
+        let x = mapped(crop.x, crop.source_width, source.0).min(source.0.saturating_sub(width) & !1);
+        let y = mapped(crop.y, crop.source_height, source.1).min(source.1.saturating_sub(height) & !1);
+        CropRect { x, y, width, height, ..crop }
+    } else { crop };
+    let valid = crop.width >= MIN_DIMENSION
+        && crop.height >= MIN_DIMENSION
+        && [crop.x, crop.y, crop.width, crop.height].iter().all(|v| v % 2 == 0)
+        && crop.x.checked_add(crop.width).is_some_and(|right| right <= source.0)
+        && crop.y.checked_add(crop.height).is_some_and(|bottom| bottom <= source.1);
+    if !valid {
+        return Err(ShiftError::new("invalid_crop", "The frame must stay inside the source."));
+    }
+    if let Some((rw, rh)) = spec.ratio.parts() {
+        let difference = (crop.width as i64 * rh as i64 - crop.height as i64 * rw as i64).abs();
+        if difference > rw.max(rh) as i64 * 2 {
+            return Err(ShiftError::new("invalid_crop", "The frame must keep its selected ratio."));
+        }
+    }
+    let canvas = (crop.width, crop.height);
+    let post = if spec.ratio == AspectRatio::Freeform {
+        match (spec.width, spec.height) {
+            (Some(w), Some(h)) if (w, h) != canvas => {
+                if w < MIN_DIMENSION || h < MIN_DIMENSION || w > MAX_DIMENSION || h > MAX_DIMENSION
+                    || (w as u64 * canvas.1 as u64) != (h as u64 * canvas.0 as u64) {
+                    return Err(ShiftError::new("invalid_crop", "The frame and output size must have the same shape."));
+                }
+                Some((w, h))
+            }
+            _ => None,
+        }
+    } else { None };
+    Ok(Reframe {
+        source,
+        scale: None,
+        canvas,
+        post,
+        mode: FrameMode::Fill,
+        upscales: post.is_some_and(|(w, h)| w > canvas.0 || h > canvas.1),
+        crop_origin: Some((crop.x, crop.y)),
+        flip: Flip::default(),
+    })
 }
 
 /// Drop a transform that would not change anything, so callers keep their
@@ -431,6 +574,8 @@ fn preset(source: (u32, u32), rw: u32, rh: u32, mode: FrameMode) -> Reframe {
                 post: None,
                 mode,
                 upscales: false,
+                crop_origin: None,
+                flip: Flip::default(),
             }
         }
         // A canvas of the target ratio whose longest edge matches the source's
@@ -453,6 +598,8 @@ fn preset(source: (u32, u32), rw: u32, rh: u32, mode: FrameMode) -> Reframe {
                 post: None,
                 mode,
                 upscales: false,
+                crop_origin: None,
+                flip: Flip::default(),
             };
             r.fix_up();
             r
@@ -494,6 +641,8 @@ fn freeform(source: (u32, u32), w: u32, h: u32, mode: FrameMode) -> Result<Refra
         // Strictly greater: a factor of exactly 1 is a crop or a pad, not an
         // enlargement.
         upscales: f > 1.0,
+        crop_origin: None,
+        flip: Flip::default(),
     };
     r.fix_up();
     Ok(r)
@@ -512,6 +661,8 @@ mod tests {
             frame,
             width: None,
             height: None,
+            crop: None,
+            flip: Default::default(),
         }
     }
 
@@ -519,6 +670,57 @@ mod tests {
         resolve(source, &spec(ratio, frame))
             .unwrap()
             .expect("a transform")
+    }
+
+    #[test]
+    fn manual_fill_uses_the_same_source_crop_in_preview_and_ffmpeg() {
+        let mut request = spec(AspectRatio::R16x9, FrameMode::Fill);
+        request.crop = Some(CropRect { x: 320, y: 180, width: 1280, height: 720, ..CropRect::default() });
+        let frame = resolve((1920, 1080), &request).unwrap().unwrap();
+        assert_eq!(frame.final_size(), (1280, 720));
+        assert_eq!(frame.content_box().offset_x, -320);
+        assert_eq!(frame.content_box().offset_y, -180);
+        assert_eq!(frame.filters(), vec!["crop=1280:720:320:180", "setsar=1"]);
+    }
+
+    #[test]
+    fn crop_tracks_the_same_region_at_a_different_download_quality() {
+        let mut request = spec(AspectRatio::R16x9, FrameMode::Fill);
+        request.crop = Some(CropRect {
+            x: 160, y: 90, width: 640, height: 360,
+            source_width: 960, source_height: 540,
+        });
+        let frame = resolve((1920, 1080), &request).unwrap().unwrap();
+        assert_eq!(frame.filters(), vec!["crop=1280:720:320:180", "setsar=1"]);
+    }
+
+    #[test]
+    fn untouched_presets_remain_centered_and_fit_ignores_manual_crop() {
+        let mut request = spec(AspectRatio::R9x16, FrameMode::Fill);
+        let centered = resolve((1920, 1080), &request).unwrap().unwrap();
+        let box_before = centered.content_box();
+        assert_eq!(box_before.offset_x, (box_before.canvas_width as i64 - box_before.frame_width as i64) / 2);
+        request.crop = Some(CropRect { x: 0, y: 0, width: 540, height: 960, ..CropRect::default() });
+        let moved = resolve((1920, 1080), &request).unwrap().unwrap();
+        assert_eq!(moved.filters(), vec!["crop=540:960:0:0", "setsar=1"]);
+        request.frame = FrameMode::Fit;
+        assert_eq!(resolve((1920, 1080), &request).unwrap().unwrap().content_box().offset_x,
+            resolve((1920, 1080), &spec(AspectRatio::R9x16, FrameMode::Fit)).unwrap().unwrap().content_box().offset_x);
+        request.ratio = AspectRatio::Original;
+        assert!(resolve((1920, 1080), &request).unwrap().is_none());
+    }
+
+    #[test]
+    fn rejects_out_of_bounds_tiny_and_wrong_ratio_crops() {
+        let mut request = spec(AspectRatio::R16x9, FrameMode::Fill);
+        for crop in [
+            CropRect { x: 1900, y: 0, width: 1280, height: 720, ..CropRect::default() },
+            CropRect { x: 0, y: 0, width: 8, height: 4, ..CropRect::default() },
+            CropRect { x: 0, y: 0, width: 800, height: 800, ..CropRect::default() },
+        ] {
+            request.crop = Some(crop);
+            assert!(resolve((1920, 1080), &request).is_err());
+        }
     }
 
     /// How far the canvas is from the ratio it claims, as a fraction.
@@ -530,7 +732,7 @@ mod tests {
 
     #[test]
     fn original_changes_nothing() {
-        assert!(resolve(LANDSCAPE, &AspectSpec::default())
+        assert!(resolve((1920, 1080), &AspectSpec::default())
             .unwrap()
             .is_none());
         assert!(
@@ -548,7 +750,7 @@ mod tests {
         // reached FFmpeg as an empty filter graph.
         for mode in [FrameMode::Fill, FrameMode::Fit] {
             assert!(
-                resolve(LANDSCAPE, &spec(AspectRatio::R16x9, mode))
+                resolve((1920, 1080), &spec(AspectRatio::R16x9, mode))
                     .unwrap()
                     .is_none(),
                 "16:9 {mode:?} on a 16:9 source"
@@ -560,8 +762,10 @@ mod tests {
             frame: FrameMode::Fit,
             width: Some(1920),
             height: Some(1080),
+            crop: None,
+            flip: Default::default(),
         };
-        assert!(resolve(LANDSCAPE, &same).unwrap().is_none());
+        assert!(resolve((1920, 1080), &same).unwrap().is_none());
     }
 
     #[test]
@@ -740,6 +944,8 @@ mod tests {
                 frame: mode,
                 width: Some(w),
                 height: Some(h),
+                crop: None,
+                flip: Default::default(),
             },
         )
     }
@@ -811,6 +1017,8 @@ mod tests {
                 frame: FrameMode::Fill,
                 width: Some(400),
                 height: None,
+                crop: None,
+                flip: Default::default(),
             },
         );
         assert_eq!(half.unwrap_err().code, "invalid_dimensions");
@@ -900,6 +1108,8 @@ mod ordering_tests {
             frame,
             width: None,
             height: None,
+            crop: None,
+            flip: Default::default(),
         }
     }
 
@@ -917,6 +1127,8 @@ mod ordering_tests {
                 frame: mode,
                 width: Some(w),
                 height: Some(h),
+                crop: None,
+                flip: Default::default(),
             },
         )
     }
@@ -933,6 +1145,8 @@ mod ordering_tests {
                 frame: FrameMode::Fill,
                 width: None,
                 height: None,
+                crop: None,
+                flip: Default::default(),
             },
         )
         .unwrap()
@@ -955,6 +1169,8 @@ mod ordering_tests {
                 frame: FrameMode::Fit,
                 width: None,
                 height: None,
+                crop: None,
+                flip: Default::default(),
             },
         )
         .unwrap()
@@ -1125,6 +1341,8 @@ mod ordering_tests {
                 frame: FrameMode::Fit,
                 width: None,
                 height: None,
+                crop: None,
+                flip: Default::default(),
             },
         )
         .unwrap()
@@ -1144,6 +1362,8 @@ mod ordering_tests {
                 frame: FrameMode::Fill,
                 width: None,
                 height: None,
+                crop: None,
+                flip: Default::default(),
             },
         )
         .unwrap()
@@ -1164,6 +1384,8 @@ mod ordering_tests {
                 frame: FrameMode::Fill,
                 width: None,
                 height: None,
+                crop: None,
+                flip: Default::default(),
             },
         )
         .unwrap()
@@ -1190,6 +1412,8 @@ mod ordering_tests {
                 frame: FrameMode::Fit,
                 width: None,
                 height: None,
+                crop: None,
+                flip: Default::default(),
             },
         )
         .unwrap()
@@ -1219,6 +1443,8 @@ mod ordering_tests {
                         frame: mode,
                         width: None,
                         height: None,
+                        crop: None,
+                        flip: Default::default(),
                     };
                     let Some(r) = resolve(src, &spec).unwrap() else {
                         continue;
@@ -1237,5 +1463,96 @@ mod ordering_tests {
                 }
             }
         }
+    }
+
+    fn flipped(mut spec: AspectSpec, horizontal: bool, vertical: bool) -> AspectSpec {
+        spec.flip = Flip { horizontal, vertical };
+        spec
+    }
+
+    fn count(f: &[String], name: &str) -> usize {
+        f.iter().filter(|x| *x == name).count()
+    }
+
+    #[test]
+    fn no_flip_by_default() {
+        assert_eq!(AspectSpec::default().flip, Flip { horizontal: false, vertical: false });
+        let wire: AspectSpec = serde_json::from_str(r#"{"ratio":"16:9","frame":"fill"}"#).unwrap();
+        assert!(!wire.flip.any());
+    }
+
+    #[test]
+    fn original_with_a_flip_mirrors_and_changes_nothing_else() {
+        let r = resolve((1920, 1080), &flipped(spec(AspectRatio::Original, FrameMode::Fill), true, false))
+            .unwrap()
+            .expect("a mirror is a transform");
+        assert_eq!(r.filters(), vec!["hflip"]);
+        assert_eq!(r.final_size(), (1920, 1080));
+        assert!(!r.reshapes());
+        // Original needs no measurements, and neither does a mirror.
+        let blind = resolve((0, 0), &flipped(spec(AspectRatio::Original, FrameMode::Fill), false, true));
+        assert_eq!(blind.unwrap().unwrap().filters(), vec!["vflip"]);
+    }
+
+    #[test]
+    fn each_flip_is_emitted_exactly_once_and_last() {
+        for (h, v, want) in [
+            (true, false, vec!["hflip"]),
+            (false, true, vec!["vflip"]),
+            (true, true, vec!["hflip", "vflip"]),
+        ] {
+            let r = resolve((1920, 1080), &flipped(spec(AspectRatio::R1x1, FrameMode::Fill), h, v))
+                .unwrap()
+                .unwrap();
+            let f = r.filters();
+            assert_eq!(count(&f, "hflip"), h as usize, "{f:?}");
+            assert_eq!(count(&f, "vflip"), v as usize, "{f:?}");
+            assert_eq!(&f[f.len() - want.len()..], want.as_slice(), "{f:?}");
+        }
+    }
+
+    #[test]
+    fn a_manual_fill_crop_stays_in_source_pixels_and_mirrors_after() {
+        let mut request = flipped(spec(AspectRatio::R16x9, FrameMode::Fill), true, false);
+        request.crop = Some(CropRect { x: 0, y: 0, width: 1280, height: 720, ..CropRect::default() });
+        let r = resolve((1920, 1080), &request).unwrap().unwrap();
+        // The crop is the region the user framed, unflipped: the left of the
+        // source. The mirror runs on that region, not on the source.
+        assert_eq!(r.filters(), vec!["crop=1280:720:0:0", "setsar=1", "hflip"]);
+        assert_eq!(r.content_box().offset_x, 0);
+    }
+
+    #[test]
+    fn freeform_crop_with_both_flips() {
+        let mut request = flipped(spec(AspectRatio::Freeform, FrameMode::Fill), true, true);
+        request.width = Some(600);
+        request.height = Some(400);
+        request.crop = Some(CropRect { x: 100, y: 60, width: 600, height: 400, ..CropRect::default() });
+        let r = resolve((1920, 1080), &request).unwrap().unwrap();
+        assert_eq!(r.filters(), vec!["crop=600:400:100:60", "setsar=1", "hflip", "vflip"]);
+    }
+
+    #[test]
+    fn fit_pads_first_and_mirrors_the_padded_frame() {
+        let r = resolve((1920, 1080), &flipped(spec(AspectRatio::R9x16, FrameMode::Fit), true, false))
+            .unwrap()
+            .unwrap();
+        let f = r.filters();
+        let pad = f.iter().position(|x| x.starts_with("pad=")).expect("a pad");
+        assert_eq!(f[pad + 1..], ["hflip"], "{f:?}");
+        let clear = r.filters_with(PadColor::Transparent);
+        assert!(clear.contains(&"format=rgba".to_string()));
+        assert_eq!(clear.last().map(String::as_str), Some("hflip"));
+    }
+
+    #[test]
+    fn a_capped_transform_keeps_its_flip() {
+        let r = resolve((1920, 1080), &flipped(spec(AspectRatio::R1x1, FrameMode::Fill), false, true))
+            .unwrap()
+            .unwrap()
+            .capped(480);
+        let f = r.filters();
+        assert_eq!(f.last().map(String::as_str), Some("vflip"), "{f:?}");
+        assert_eq!(count(&f, "vflip"), 1);
     }
 }

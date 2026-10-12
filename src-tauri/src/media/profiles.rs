@@ -526,9 +526,14 @@ pub fn build_plan_with_audio(
             // Shape first — a reframe, or only the even crop yuv420p demands —
             // then, for a GIF, its clock. The shape runs once per source frame,
             // before `fps` repeats anything.
+            // A mirror alone keeps the source's shape, so it still needs the
+            // even crop; the flip follows it, as it follows every reframe.
             let mut filters: Vec<String> = match reframe {
-                Some(r) => r.filters(),
-                None => even_crop(source_size(probe)).into_iter().collect(),
+                Some(r) if r.reshapes() => r.filters(),
+                _ => even_crop(source_size(probe))
+                    .into_iter()
+                    .chain(aspect_spec.flip.filters())
+                    .collect(),
             };
             if gif {
                 filters.push("setsar=1".into());
@@ -645,11 +650,13 @@ fn build_loop_plan(
         // single quotes are for FFmpeg's filtergraph parser — without them the
         // comma inside `min()` would read as the end of the filter. No shell is
         // involved; this array goes to `execvp` as-is.
-        format!(
+        let mut parts = vec![format!(
             "fps={},scale=w='min(iw,{})':h=-2:flags=lanczos",
             loop_size.fps(),
             loop_size.longest_edge()
-        )
+        )];
+        parts.extend(reframe.map(|r| r.flip).unwrap_or_default().filters());
+        parts.join(",")
     };
 
     // A trimmed GIF is cut on its own clock first, so the frame on screen at IN
@@ -998,6 +1005,8 @@ mod tests {
             frame: aspect::FrameMode::Fill,
             width: None,
             height: None,
+            crop: None,
+            flip: Default::default(),
         };
         let plan = build_plan(
             Path::new("/in.mov"),
@@ -1023,6 +1032,102 @@ mod tests {
         // And the square canvas is capped on its longest edge.
         assert!(graph.contains("crop=1080:1080"), "{graph}");
         assert!(graph.contains("scale=480:480"), "{graph}");
+    }
+
+    #[test]
+    fn video_and_loop_exports_use_the_requested_source_crop() {
+        let spec = AspectSpec {
+            ratio: aspect::AspectRatio::R16x9,
+            frame: aspect::FrameMode::Fill,
+            crop: Some(aspect::CropRect {
+                x: 320, y: 180, width: 1280, height: 720,
+                ..aspect::CropRect::default()
+            }),
+            ..AspectSpec::default()
+        };
+        for (format, output) in [(OutputFormat::Mp4, "/out.mp4"), (OutputFormat::Gif, "/out.gif")] {
+            let plan = build_plan(
+                Path::new("/in.mov"), &h264_mov(), format,
+                Some(ClipRange { start: 0.0, end: 4.0 }),
+                LoopSize::default(), &spec, Path::new(output),
+            ).unwrap();
+            assert!(plan.args.iter().any(|arg| arg.contains("crop=1280:720:320:180")), "{:?}", plan.args);
+        }
+    }
+
+    fn flip(horizontal: bool, vertical: bool) -> AspectSpec {
+        AspectSpec {
+            flip: aspect::Flip { horizontal, vertical },
+            ..AspectSpec::default()
+        }
+    }
+
+    #[test]
+    fn a_flip_reencodes_video_and_leaves_the_audio_alone() {
+        let plain = plan(&h264_mov(), OutputFormat::Mp4, None).unwrap();
+        let plan = build_plan(
+            Path::new("/in.mov"), &h264_mov(), OutputFormat::Mp4, None,
+            LoopSize::default(), &flip(true, false), Path::new("/out.mp4"),
+        ).unwrap();
+        assert!(!plan.remuxed);
+        let vf = plan.args.windows(2).find(|w| w[0] == "-vf").map(|w| w[1].clone()).expect("-vf");
+        assert_eq!(vf, "hflip");
+        // The sound is copied exactly as it is without a flip.
+        assert!(plan.args.windows(2).any(|w| w == ["-c:a", "copy"]), "{:?}", plan.args);
+        assert!(plain.args.windows(2).any(|w| w == ["-c", "copy"]));
+    }
+
+    #[test]
+    fn audio_exports_ignore_a_flip() {
+        let with = build_plan(
+            Path::new("/in.mov"), &h264_mov(), OutputFormat::Mp3, None,
+            LoopSize::default(), &flip(true, true), Path::new("/out.mp3"),
+        ).unwrap();
+        let without = build_plan(
+            Path::new("/in.mov"), &h264_mov(), OutputFormat::Mp3, None,
+            LoopSize::default(), &AspectSpec::default(), Path::new("/out.mp3"),
+        ).unwrap();
+        assert_eq!(with.args, without.args);
+    }
+
+    #[test]
+    fn a_flipped_odd_source_still_gets_its_even_crop() {
+        let mut probe = h264_mov();
+        probe.video.as_mut().unwrap().width = Some(1919);
+        let plan = build_plan(
+            Path::new("/in.mov"), &probe, OutputFormat::Webm, None,
+            LoopSize::default(), &flip(false, true), Path::new("/out.webm"),
+        ).unwrap();
+        let vf = plan.args.windows(2).find(|w| w[0] == "-vf").map(|w| w[1].clone()).expect("-vf");
+        assert_eq!(vf, "crop=1918:1080:0:0,vflip");
+    }
+
+    #[test]
+    fn a_flipped_crop_mirrors_after_cropping_in_video_and_loops() {
+        let spec = AspectSpec {
+            ratio: aspect::AspectRatio::R1x1,
+            frame: aspect::FrameMode::Fill,
+            crop: Some(aspect::CropRect { x: 0, y: 0, width: 1080, height: 1080, ..aspect::CropRect::default() }),
+            flip: aspect::Flip { horizontal: true, vertical: true },
+            ..AspectSpec::default()
+        };
+        for (format, output) in [(OutputFormat::Mp4, "/out.mp4"), (OutputFormat::Gif, "/out.gif"), (OutputFormat::Webp, "/out.webp")] {
+            let plan = build_plan(
+                Path::new("/in.mov"), &h264_mov(), format,
+                Some(ClipRange { start: 0.0, end: 4.0 }),
+                LoopSize::default(), &spec, Path::new(output),
+            ).unwrap();
+            let graph = plan.args.iter().find(|a| a.contains("crop=1080:1080:0:0")).expect("the crop");
+            let crop = graph.find("crop=").unwrap();
+            let h = graph.find("hflip").expect("hflip");
+            let v = graph.find("vflip").expect("vflip");
+            assert!(crop < h && h < v, "{graph}");
+            assert_eq!(graph.matches("hflip").count(), 1, "{graph}");
+            assert_eq!(graph.matches("vflip").count(), 1, "{graph}");
+            if let Some(palette) = graph.find("palettegen") {
+                assert!(v < palette, "{graph}");
+            }
+        }
     }
 
     #[test]

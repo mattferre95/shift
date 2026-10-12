@@ -1,9 +1,10 @@
 import { Button } from "@/components/Button";
 import { Chip } from "@/components/Chip";
 import { Field } from "@/components/Panel";
-import { exportBlocker, exportModifiers } from "@/features/export/summary";
+import { exportBlocker, exportModifiers, soundApplies, sourceHasAudio } from "@/features/export/summary";
 import { OutputChips } from "@/features/export/OutputChips";
 import { SoundControl } from "@/features/edit/SoundControl";
+import { FlipControls } from "@/features/resize/FlipControls";
 import { UrlPreviewStatus } from "@/features/input/UrlPreviewStatus";
 import { HomeFrame, LinkIcon, Resolving } from "@/features/input/Home";
 import { formatDuration } from "@/lib/format";
@@ -31,8 +32,9 @@ export function SourceResult() {
   const multi = isUrl && (s.urlMedia?.mediaItems.length ?? 0) > 1;
   // A post with several items has its own view: the collection and the item.
   if (multi) return <PostView />;
-  // Sound has its own control on this screen, so it is not repeated below.
-  const modifiers = exportModifiers(s).filter((m) => m !== "Sound off");
+  // Sound and flip have their own controls on this screen, so they are not
+  // repeated in words below.
+  const modifiers = exportModifiers(s).filter((m) => m !== "Sound off" && !m.startsWith("Flip "));
   const blocker = exportBlocker(s);
 
   return (
@@ -190,10 +192,7 @@ function Actions() {
 
   return (
     <div className="flex flex-wrap items-center justify-end gap-[10px]">
-      {/* The same control and state as Edit's header, so either place can change it. */}
-      <div className="mr-auto">
-        <SoundControl />
-      </div>
+      <QuickActions />
       {shortcuts
         .filter((m) => available[m.id])
         .map((m) => (
@@ -211,6 +210,24 @@ function Actions() {
         {/* The ellipsis is literal: this opens the native Save panel or folder picker. */}
         {isUrl ? "Download…" : "Export…"}
       </Button>
+    </div>
+  );
+}
+
+/**
+ * One-click transforms without leaving this screen. Each is the same control,
+ * on the same state, as its home in Edit or Resize; each decides for itself
+ * whether it applies, so nothing here repeats those rules.
+ */
+function QuickActions() {
+  const s = useShift();
+  const sound = soundApplies(s) && sourceHasAudio(s) != null;
+  if (!sound && !s.showAspect) return <div className="mr-auto" />;
+  return (
+    <div role="group" aria-label="Quick actions" className="mr-auto flex flex-wrap items-center gap-[10px]">
+      <span className="text-[11.5px] font-medium text-shift-muted">Quick actions</span>
+      <SoundControl />
+      {s.showAspect && <FlipControls />}
     </div>
   );
 }

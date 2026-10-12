@@ -6,6 +6,7 @@ import { formatMediaTime, formatTimestamp, parseTimestamp } from "@/lib/format";
 import { TimeField } from "@/components/TimeField";
 import { Segmented } from "@/components/Segmented";
 import { Spinner } from "@/components/Spinner";
+import { flipContent, flipStyle } from "@/features/resize/framing";
 
 /** Half the width of a range thumb: where the browser centres the 0% and 100% thumbs. */
 const HALF_THUMB = 9;
@@ -107,7 +108,10 @@ export function TrimPlayer({ header }: { header?: ReactNode }) {
   };
 
   const p = s.showAspect ? s.aspectPreview : null;
-  const box = p?.content;
+  // The export's flip applies to visual outputs only, so the preview follows
+  // the same rule. Only the picture is mirrored; the controls never are.
+  const flip = s.showAspect ? s.flip : null;
+  const box = p?.content && flip ? flipContent(p.content, flip) : p?.content;
   const fit = box && stageSize ? Math.min(stageSize.w / box.canvasWidth, stageSize.h / box.canvasHeight) : null;
   const pct = (n: number) => `${Math.max(0, Math.min(100, n / (total || 1) * 100))}%`;
   const statusLabel = status === "resolving" ? "Resolving link" : status === "downloading" ? "Downloading preview" : status === "preparing" ? "Preparing player" : "Ready";
@@ -148,7 +152,7 @@ export function TrimPlayer({ header }: { header?: ReactNode }) {
               <video ref={media} src={convertFileSrc(info.path)} preload="auto" playsInline
                 muted={!s.soundEnabled}
                 aria-label={info.hasVideo ? "Media preview" : "Audio playback"}
-                style={box && fit && info.hasVideo ? { position: "absolute", maxWidth: "none", width: `${box.frameWidth / box.canvasWidth * 100}%`, height: `${box.frameHeight / box.canvasHeight * 100}%`, left: `${box.offsetX / box.canvasWidth * 100}%`, top: `${box.offsetY / box.canvasHeight * 100}%` } : { width: "100%", height: "100%", objectFit: "contain" }}
+                style={box && fit && info.hasVideo ? { position: "absolute", maxWidth: "none", width: `${box.frameWidth / box.canvasWidth * 100}%`, height: `${box.frameHeight / box.canvasHeight * 100}%`, left: `${box.offsetX / box.canvasWidth * 100}%`, top: `${box.offsetY / box.canvasHeight * 100}%`, transform: flip ? flipStyle(flip) : undefined } : { width: "100%", height: "100%", objectFit: "contain", transform: flip && info.hasVideo ? flipStyle(flip) : undefined }}
                 onLoadedMetadata={playerReady} onCanPlay={playerReady} onError={() => void fallback()}
                 onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onEnded={() => {setPlaying(false); selection.current = false;}}
                 onTimeUpdate={() => { const el = media.current; if (!el) return; if (selection.current && el.currentTime >= endRef.current) { el.pause(); el.currentTime = endRef.current; selection.current = false; } setTime(el.currentTime); }} />

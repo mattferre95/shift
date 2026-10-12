@@ -3,7 +3,7 @@
 //! Fixtures are generated at test time — a PNG from FFmpeg, converted to HEIC
 //! by macOS itself — so no personal photos are needed or committed.
 
-use shift_lib::media::aspect::{AspectRatio, AspectSpec, FrameMode};
+use shift_lib::media::aspect::{AspectRatio, AspectSpec, CropRect, Flip, FrameMode};
 use shift_lib::media::image::{self, Compression, ImageStep};
 use shift_lib::media::profiles::OutputFormat;
 use shift_lib::process::{run_capture, Binary, CancelToken};
@@ -427,6 +427,8 @@ fn spec(ratio: AspectRatio, frame: FrameMode) -> AspectSpec {
         frame,
         width: None,
         height: None,
+        crop: None,
+        flip: Default::default(),
     }
 }
 
@@ -446,6 +448,26 @@ fn images_reframe_to_every_ratio() {
         let (w, h, _) = framed(&jpg, OutputFormat::Jpg, &spec(ratio, mode), &name);
         assert_eq!((w, h), want, "{ratio:?} {mode:?}");
     }
+}
+
+#[test]
+fn an_image_export_uses_a_manually_positioned_crop() {
+    let source = scratch("manual-source").join("source.png");
+    let args = vec![
+        "-y".into(), "-loglevel".into(), "error".into(),
+        "-f".into(), "lavfi".into(), "-i".into(),
+        "testsrc2=size=1200x800".into(), "-frames:v".into(), "1".into(),
+        source.to_string_lossy().into_owned(),
+    ];
+    let generated = run_capture(Binary::Ffmpeg, &args, &CancelToken::new()).unwrap();
+    assert!(generated.success, "{}", generated.log());
+    let mut request = spec(AspectRatio::R16x9, FrameMode::Fill);
+    request.crop = Some(shift_lib::media::aspect::CropRect {
+        x: 200, y: 100, width: 640, height: 360,
+        ..shift_lib::media::aspect::CropRect::default()
+    });
+    let (w, h, _) = framed(&source, OutputFormat::Jpg, &request, "manual-crop");
+    assert_eq!((w, h), (640, 360));
 }
 
 #[test]
@@ -564,6 +586,8 @@ fn a_freeform_image_size_is_exact_and_reports_an_upscale() {
         frame: FrameMode::Fill,
         width: Some(300),
         height: Some(300),
+        crop: None,
+        flip: Default::default(),
     };
     let (w, h, _) = framed(&jpg, OutputFormat::Png, &down, "img-free");
     assert_eq!((w, h), (300, 300));
@@ -969,4 +993,88 @@ fn a_preview_derivative_keeps_the_source_proportions() {
         d.width,
         d.height
     );
+}
+
+// -------------------------------------------------------------- mirroring
+
+/// The RGB at one pixel of a finished image.
+fn rgb_at(path: &Path, x: u32, y: u32) -> [u8; 3] {
+    let raw = path.with_extension(format!("{x}-{y}.raw"));
+    let args: Vec<String> = vec![
+        "-y".into(), "-loglevel".into(), "error".into(),
+        "-i".into(), path.to_string_lossy().to_string(),
+        "-vf".into(), format!("format=rgb24,crop=1:1:{x}:{y}"),
+        "-pix_fmt".into(), "rgb24".into(), "-f".into(), "rawvideo".into(),
+        raw.to_string_lossy().to_string(),
+    ];
+    let out = run_capture(Binary::Ffmpeg, &args, &CancelToken::new()).unwrap();
+    assert!(out.success, "could not read pixel: {}", out.log());
+    let bytes = std::fs::read(&raw).unwrap();
+    [bytes[0], bytes[1], bytes[2]]
+}
+
+/// 400x200 blue with a red 100x100 square in its top-left corner.
+fn marked_source() -> PathBuf {
+    static P: OnceLock<PathBuf> = OnceLock::new();
+    P.get_or_init(|| {
+        let path = workspace().join("marked.png");
+        let args: Vec<String> = [
+            "-y", "-loglevel", "error", "-f", "lavfi",
+            "-i", "color=c=blue:s=400x200,drawbox=x=0:y=0:w=100:h=100:color=red:t=fill",
+            "-frames:v", "1",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .chain(std::iter::once(path.to_string_lossy().to_string()))
+        .collect();
+        let out = run_capture(Binary::Ffmpeg, &args, &CancelToken::new()).unwrap();
+        assert!(out.success, "{}", out.log());
+        path
+    })
+    .clone()
+}
+
+fn is_red(p: [u8; 3]) -> bool {
+    p[0] > 200 && p[2] < 60
+}
+
+#[test]
+fn a_flipped_crop_exports_the_framed_region_mirrored() {
+    let src = marked_source();
+    // The left square of the source, holding the red mark in its top-left.
+    let framed = |flip: Flip| AspectSpec {
+        crop: Some(CropRect { x: 0, y: 0, width: 200, height: 200, ..CropRect::default() }),
+        flip,
+        ..spec(AspectRatio::R1x1, FrameMode::Fill)
+    };
+    let plain = produce(&src, OutputFormat::Png, &framed(Flip::default()), "flip-none");
+    assert!(is_red(rgb_at(&plain, 10, 10)));
+    assert!(!is_red(rgb_at(&plain, 190, 10)));
+
+    let h = produce(&src, OutputFormat::Png, &framed(Flip { horizontal: true, vertical: false }), "flip-h");
+    assert_eq!(probe_of(&h).width, 200);
+    assert!(!is_red(rgb_at(&h, 10, 10)), "the mark should move right");
+    assert!(is_red(rgb_at(&h, 190, 10)));
+
+    let v = produce(&src, OutputFormat::Png, &framed(Flip { horizontal: false, vertical: true }), "flip-v");
+    assert!(!is_red(rgb_at(&v, 10, 10)), "the mark should move down");
+    assert!(is_red(rgb_at(&v, 10, 190)));
+
+    let both = produce(&src, OutputFormat::Png, &framed(Flip { horizontal: true, vertical: true }), "flip-hv");
+    assert!(is_red(rgb_at(&both, 190, 190)));
+    assert!(!is_red(rgb_at(&both, 10, 10)));
+}
+
+#[test]
+fn original_with_a_flip_mirrors_the_whole_image() {
+    let src = marked_source();
+    let spec = AspectSpec {
+        flip: Flip { horizontal: true, vertical: false },
+        ..spec(AspectRatio::Original, FrameMode::Fill)
+    };
+    let out = produce(&src, OutputFormat::Png, &spec, "flip-original");
+    let p = probe_of(&out);
+    assert_eq!((p.width, p.height), (400, 200));
+    assert!(is_red(rgb_at(&out, 390, 10)));
+    assert!(!is_red(rgb_at(&out, 10, 10)));
 }

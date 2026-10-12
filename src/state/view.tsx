@@ -64,6 +64,10 @@ export function ViewProvider({ children }: { children: ReactNode }) {
     [available],
   );
 
+  useEffect(() => {
+    if (s.screen === "empty" && !s.analyzing) setChosen("download");
+  }, [s.screen, s.analyzing]);
+
   // ⌘1–⌘5, in sidebar order.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

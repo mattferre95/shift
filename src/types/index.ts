@@ -64,12 +64,37 @@ export type AspectRatio = "original" | "freeform" | "16:9" | "9:16" | "1:1" | "4
 /** Mirrors `aspect::FrameMode`. */
 export type FrameMode = "fill" | "fit";
 
+/** Source-pixel rectangle used by preview and export after direct framing. */
+export interface CropRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  /** Dimensions where the crop was drawn; Rust maps it to the acquired source. */
+  sourceWidth?: number;
+  sourceHeight?: number;
+}
+
+/**
+ * Mirrors `aspect::Flip`. Applied after every crop, scale and pad, so a crop
+ * stays in unflipped source pixels. Kept beside the aspect in state, never
+ * inside it, and joined to it only on the wire.
+ */
+export interface Flip {
+  horizontal: boolean;
+  vertical: boolean;
+}
+
+export const FLIP_NONE: Flip = { horizontal: false, vertical: false };
+
 /** Mirrors `aspect::AspectSpec`. */
 export interface AspectSpec {
   ratio: AspectRatio;
   frame: FrameMode;
   width: number | null;
   height: number | null;
+  crop?: CropRect | null;
+  flip?: Flip;
 }
 
 export const ASPECT_DEFAULT: AspectSpec = {
@@ -77,6 +102,7 @@ export const ASPECT_DEFAULT: AspectSpec = {
   frame: "fill",
   width: null,
   height: null,
+  crop: null,
 };
 
 /**

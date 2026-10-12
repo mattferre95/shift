@@ -631,6 +631,8 @@ fn aspect(ratio: AspectRatio, frame: FrameMode) -> AspectSpec {
         frame,
         width: None,
         height: None,
+        crop: None,
+        flip: Default::default(),
     }
 }
 
@@ -973,6 +975,8 @@ fn a_freeform_size_is_produced_exactly() {
         frame: FrameMode::Fill,
         width: Some(500),
         height: Some(500),
+        crop: None,
+        flip: Default::default(),
     };
     let d = reframed(&fixture(), OutputFormat::Mp4, &spec, "a-free");
     assert_eq!(d, (500, 500));
@@ -987,6 +991,8 @@ fn a_freeform_upscale_is_produced_but_flagged() {
         frame: FrameMode::Fill,
         width: Some(1280),
         height: Some(720),
+        crop: None,
+        flip: Default::default(),
     };
     let r = shift_lib::media::aspect::resolve((640, 360), &spec)
         .unwrap()
@@ -1263,6 +1269,8 @@ fn a_previewed_freeform_size_is_the_size_that_comes_out() {
             frame: mode,
             width: Some(w),
             height: Some(h),
+            crop: None,
+            flip: Default::default(),
         };
         let b = content_of((640, 360), &spec, None);
         let name = format!("pv-free-{w}x{h}-{mode:?}");

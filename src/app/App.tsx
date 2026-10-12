@@ -98,7 +98,7 @@ function ModeView({ view }: { view: View }) {
 }
 
 /**
- * Desktop conventions: ⌘V paste a link, ⌘O choose a file, ⌘⇧E export,
+ * Desktop conventions: ⌘V paste a link, ⌘O choose a file, ⌘N start over, ⌘⇧E export,
  * Esc cancel or dismiss. Text-editing shortcuts are never intercepted.
  */
 function useDesktopBehaviour() {
@@ -142,12 +142,18 @@ function useDesktopBehaviour() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (e.isComposing) return;
       const target = e.target as HTMLElement | null;
       const editing = target?.tagName === "INPUT" || target?.tagName === "TEXTAREA";
 
       if (e.metaKey && !e.shiftKey && e.key.toLowerCase() === "o") {
         e.preventDefault();
         if (s.screen !== "processing") s.openFilePicker();
+        return;
+      }
+      if (e.metaKey && !e.shiftKey && !e.altKey && !e.ctrlKey && e.key.toLowerCase() === "n") {
+        e.preventDefault();
+        s.reset();
         return;
       }
       if (e.metaKey && e.shiftKey && e.key.toLowerCase() === "e") {

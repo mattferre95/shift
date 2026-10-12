@@ -47,6 +47,10 @@ export function exportSettings(s: Shift): ExportSetting[] {
         : aspectLabel(s.aspect.ratio);
     out.push({ label: "Aspect", value: `${shape} ${frame}`, phrase: `${shape} ${frame}` });
   }
+  if (s.showAspect && (s.flip.horizontal || s.flip.vertical)) {
+    const value = s.flip.horizontal && s.flip.vertical ? "Horizontal + Vertical" : s.flip.horizontal ? "Horizontal" : "Vertical";
+    out.push({ label: "Flip", value, phrase: `Flip ${value.toLowerCase()}` });
+  }
   if (s.isLoop) {
     const size = LOOP_SIZES.find((l) => l.id === s.loopSize);
     if (size) out.push({ label: "Loop", value: size.label, phrase: `${size.label} loop` });

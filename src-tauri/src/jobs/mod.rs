@@ -308,7 +308,7 @@ fn plan_actions(
     }
 
     let aspect = request.aspect.unwrap_or_default();
-    if !aspect.is_original() && !request.format.is_audio_only() {
+    if aspect.transforms() && !request.format.is_audio_only() {
         actions.push(ActionSpec::Reframe {
             ratio: aspect.ratio,
             frame: aspect.frame,
@@ -596,9 +596,23 @@ mod tests {
             frame: FrameMode::Fit,
             width: Some(1080),
             height: Some(1350),
+            crop: None,
+            flip: Default::default(),
         });
         r.clip = clip("00:00.000", "00:15.000");
         assert_eq!(named(&r), "carti_1080x1350_15s.mp4");
+    }
+
+    #[test]
+    fn a_flip_never_changes_the_name() {
+        let flip = crate::media::aspect::Flip { horizontal: true, vertical: true };
+        for (ratio_choice, want) in [(AspectRatio::Original, "carti.mp4"), (AspectRatio::R9x16, "carti_916.mp4")] {
+            let mut r = request("/v/carti.mov", OutputFormat::Mp4);
+            r.aspect = Some(AspectSpec { ratio: ratio_choice, flip, ..AspectSpec::default() });
+            assert_eq!(named(&r), want);
+            r.sound_enabled = false;
+            assert_eq!(named(&r), want);
+        }
     }
 
     #[test]
@@ -1056,7 +1070,7 @@ fn execute_image(
     // that actually run rather than guessing from how many there are.
     let mut actions = vec![ActionSpec::Analyze];
     let aspect = request.aspect.unwrap_or_default();
-    if !aspect.is_original() {
+    if aspect.transforms() {
         actions.push(ActionSpec::Reframe {
             ratio: aspect.ratio,
             frame: aspect.frame,

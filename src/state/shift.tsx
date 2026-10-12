@@ -19,6 +19,7 @@ import {
 } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import * as ipc from "@/lib/ipc";
+import { centeredCrop, cropForSource } from "@/features/resize/framing";
 import { formatTimestamp, parseTimestamp } from "@/lib/format";
 import {
   applyTrimPreset,
@@ -34,6 +35,7 @@ import {
 import {
   compressionOptions,
   ASPECT_DEFAULT,
+  FLIP_NONE,
   isAnimationFormat,
   isAudioFormat,
   keepsAlpha,
@@ -44,6 +46,8 @@ import {
   type AspectRatio,
   type AspectSpec,
   type Compression,
+  type CropRect,
+  type Flip,
   type FrameMode,
   type LoopSize,
   type ExportRequest,
@@ -101,6 +105,8 @@ interface ShiftState {
   loopSize: LoopSize;
   aspect: AspectSpec;
   aspectPreview: AspectPreview | null;
+  /** Mirroring of the source. Beside the aspect, never part of its geometry. */
+  flip: Flip;
   /** The cached preview image for the current source, inlined, if any. */
   previewSource: string | null;
   /** Why a preview could not be built, so the box explains itself. */
@@ -151,6 +157,8 @@ interface ShiftApi extends ShiftState {
   setAspectRatio: (r: AspectRatio) => void;
   setFrameMode: (m: FrameMode) => void;
   setAspectSize: (side: "width" | "height", value: number | null) => void;
+  setCropRect: (crop: CropRect) => void;
+  toggleFlip: (axis: keyof Flip) => void;
   aspectLocked: boolean;
   toggleAspectLock: () => void;
   compressionChoices: { id: Compression; label: string }[];
@@ -208,6 +216,7 @@ const initial: ShiftState = {
   loopSize: "standard",
   aspect: ASPECT_DEFAULT,
   aspectPreview: null,
+  flip: FLIP_NONE,
   previewSource: null,
   previewError: null,
   job: null,
@@ -242,6 +251,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
   // A UI preference rather than part of the request: the backend is told a
   // width and a height, never how the user arrived at them.
   const [aspectLocked, setAspectLocked] = useState(true);
+  const lockedFreeformRatio = useRef<number | null>(null);
   const patch = useCallback((p: Partial<ShiftState>) => set((prev) => ({ ...prev, ...p })), []);
 
   // The last thing the user handed us, so Try again can repeat it.
@@ -249,6 +259,9 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
     null,
   );
   const jobRef = useRef<string | null>(null);
+  const awaitingJobId = useRef(false);
+  const retiredJobs = useRef(new Set<string>());
+  const sourceGeneration = useRef(0);
 
   useEffect(() => {
     ipc.defaultOutputDir().then((dir) => patch({ outputDir: dir })).catch(() => {});
@@ -264,7 +277,12 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const unlisten = ipc.onJobEvent((event) => {
       // Ignore stragglers from a job the user already walked away from.
-      if (jobRef.current && event.jobId !== jobRef.current) return;
+      if (retiredJobs.current.has(event.jobId)) return;
+      if (!jobRef.current && awaitingJobId.current) {
+        jobRef.current = event.jobId;
+        awaitingJobId.current = false;
+      }
+      if (event.jobId !== jobRef.current) return;
 
       if (event.state === "completed" && event.output) {
         jobRef.current = null;
@@ -309,11 +327,13 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
     (raw: string) => {
       const value = raw.trim();
       if (!/^https?:\/\//i.test(value)) return;
+      const generation = ++sourceGeneration.current;
       lastInput.current = { kind: "url", value };
       patch({ analyzing: true, error: null, dragging: false });
       ipc
         .analyzeUrl(value)
         .then((media) => {
+          if (generation !== sourceGeneration.current) return;
           const first = media.mediaItems[0];
           if (!first) throw new Error("No downloadable media was found.");
           const defaultOut: OutputFormat =
@@ -338,23 +358,29 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
             clipLabel: null,
             clipSeconds: null,
             aspect: ASPECT_DEFAULT,
+            flip: FLIP_NONE,
             previewSource: null,
             output: null,
             error: null,
           }));
         })
-        .catch((e) => patch({ analyzing: false, screen: "error", error: ipc.toShiftError(e) }));
+        .catch((e) => {
+          if (generation === sourceGeneration.current)
+            patch({ analyzing: false, screen: "error", error: ipc.toShiftError(e) });
+        });
     },
     [patch],
   );
 
   const acceptFile = useCallback(
     (path: string) => {
+      const generation = ++sourceGeneration.current;
       lastInput.current = { kind: "file", value: path };
       patch({ analyzing: true, error: null, dragging: false });
       ipc
         .analyzeFile(path)
         .then((media) => {
+          if (generation !== sourceGeneration.current) return;
           const defaultOut: OutputFormat =
             media.kind === "image" ? "JPG" : media.hasVideo ? "MP4" : "MP3";
           const trim = defaultTrimRange(media.duration);
@@ -377,12 +403,16 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
             clipLabel: null,
             clipSeconds: null,
             aspect: ASPECT_DEFAULT,
+            flip: FLIP_NONE,
             previewSource: null,
             output: null,
             error: null,
           }));
         })
-        .catch((e) => patch({ analyzing: false, screen: "error", error: ipc.toShiftError(e) }));
+        .catch((e) => {
+          if (generation === sourceGeneration.current)
+            patch({ analyzing: false, screen: "error", error: ipc.toShiftError(e) });
+        });
     },
     [patch],
   );
@@ -502,8 +532,10 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
   // Pure arithmetic in the native layer: no process is spawned, so this is
   // cheap enough to run on every keystroke and keeps one implementation of the
   // geometry rather than a second one over here that could drift.
-  const sourceW = playback.info?.width ?? s.localMedia?.width ?? activeMedia?.width ?? null;
-  const sourceH = playback.info?.height ?? s.localMedia?.height ?? activeMedia?.height ?? null;
+  const measuredSource = s.localMedia?.width && s.localMedia.height
+    ? s.localMedia : activeMedia?.width && activeMedia.height ? activeMedia : playback.info;
+  const sourceW = measuredSource?.width ?? null;
+  const sourceH = measuredSource?.height ?? null;
   useEffect(() => {
     if (!sourceW || !sourceH || s.aspect.ratio === "original") {
       patch({ aspectPreview: null });
@@ -528,12 +560,15 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
   // is set, so the framing preview has a picture in every state and dragging
   // IN never asks for a fresh extraction.
   const previewAt = useMemo(() => {
-    if (!s.localMedia || s.localMedia.kind === "image") return null;
+    if (s.localMedia?.kind === "image" || activeMedia?.type === "image") return null;
     // Whole seconds only, so the native cache is hit on every repeat.
-    return s.localMedia.duration ? Math.floor(s.localMedia.duration / 2) : null;
-  }, [s.localMedia]);
+    const seconds = s.localMedia?.duration ?? playback.info?.duration ?? activeMedia?.duration;
+    return seconds ? Math.floor(seconds / 2) : null;
+  }, [s.localMedia, playback.info?.duration, activeMedia]);
 
-  const localPath = s.localMedia?.hasVideo || s.localMedia?.kind === "image" ? s.localMedia.path : null;
+  const localPath = s.localMedia?.hasVideo || s.localMedia?.kind === "image"
+    ? s.localMedia.path
+    : activeMedia?.type === "video" ? playback.info?.path ?? null : null;
   useEffect(() => {
     if (!localPath) {
       patch({ previewSource: null, previewError: null });
@@ -614,6 +649,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
    */
   const startExport = useCallback(async () => {
     if (!canExport || saving) return;
+    const generation = sourceGeneration.current;
     const selectedItems = s.urlMedia?.mediaItems.filter((item) =>
       s.selectedMediaIds.includes(item.id),
     ) ?? [];
@@ -643,9 +679,12 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
             filename: "",
           },
         });
+        setSaving(false);
         const result = await ipc.downloadPostItems(selectedItems, chosen, id);
+        if (generation !== sourceGeneration.current) return;
         jobRef.current = null;
         const saved = await ipc.setOutputDir(chosen).catch(() => chosen);
+        if (generation !== sourceGeneration.current) return;
         patch({
           screen: "complete",
           outputDir: saved,
@@ -659,6 +698,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
           },
         });
       } catch (e) {
+        if (generation !== sourceGeneration.current) return;
         jobRef.current = null;
         const error = ipc.toShiftError(e);
         if (error.code === "cancelled") {
@@ -689,7 +729,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
       outputDir: s.outputDir || null,
       compression: isImage ? s.compression : null,
       loopSize: isLoop ? s.loopSize : null,
-      aspect: showAspect ? s.aspect : null,
+      aspect: showAspect ? { ...s.aspect, flip: s.flip } : null,
       soundEnabled: s.soundEnabled,
       destinationPath: null,
     };
@@ -717,14 +757,23 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
       const saved = await ipc.setOutputDir(directory).catch(() => directory);
 
       patch({ screen: "processing", error: null, output: null, outputDir: saved });
+      awaitingJobId.current = true;
       const id = await ipc.startExport({ ...request, destinationPath: chosen });
+      awaitingJobId.current = false;
+      if (generation !== sourceGeneration.current) {
+        retiredJobs.current.add(id);
+        void ipc.cancelJob(id).catch(() => {});
+        return;
+      }
       jobRef.current = id;
     } catch (e) {
-      patch({ screen: "error", error: ipc.toShiftError(e) });
+      awaitingJobId.current = false;
+      if (generation === sourceGeneration.current)
+        patch({ screen: "error", error: ipc.toShiftError(e) });
     } finally {
       setSaving(false);
     }
-  }, [canExport, saving, s.urlMedia, s.selectedMediaIds, activeMedia, s.localMedia, s.quality, s.format, s.soundEnabled, s.clipEnabled, s.clipIn, s.clipOut, s.outputDir, s.compression, s.loopSize, s.aspect, duration, isImage, isLoop, showAspect, patch]);
+  }, [canExport, saving, s.urlMedia, s.selectedMediaIds, activeMedia, s.localMedia, s.quality, s.format, s.soundEnabled, s.clipEnabled, s.clipIn, s.clipOut, s.outputDir, s.compression, s.loopSize, s.aspect, s.flip, duration, isImage, isLoop, showAspect, patch]);
 
   const cancel = useCallback(() => {
     const id = s.job?.id ?? jobRef.current;
@@ -732,18 +781,28 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
   }, [s.job]);
 
   const reset = useCallback(() => {
+    if (saving) return;
+    if (s.screen === "empty" && !s.analyzing && !lastInput.current) {
+      document.querySelector<HTMLInputElement>('input[type="url"]')?.focus();
+      return;
+    }
+    ++sourceGeneration.current;
+    cancel();
+    if (jobRef.current) retiredJobs.current.add(jobRef.current);
+    awaitingJobId.current = false;
     void ipc.releaseUrlMedia(
       s.urlMedia?.mediaItems.flatMap((item) => item.thumbnailPath ? [item.thumbnailPath] : []) ?? [],
-    );
+    ).catch(() => {});
     jobRef.current = null;
     lastInput.current = null;
+    lockedFreeformRatio.current = null;
     set((prev) => ({
       ...initial,
       outputDir: prev.outputDir,
       health: prev.health,
       healthError: prev.healthError,
     }));
-  }, [s.urlMedia]);
+  }, [cancel, saving, s.screen, s.analyzing, s.urlMedia]);
 
   const retry = useCallback(() => {
     const last = lastInput.current;
@@ -828,33 +887,65 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
         // Moving to Freeform seeds the fields with the source's own size, so
         // the first thing shown is the truth rather than an empty box.
         if (ratio === "freeform" && prev.aspect.ratio !== "freeform") {
+          lockedFreeformRatio.current = null;
           return {
             ...prev,
+            aspectPreview: null,
             aspect: {
               ...prev.aspect,
               ratio,
-              width: prev.aspect.width ?? prev.localMedia?.width ?? null,
-              height: prev.aspect.height ?? prev.localMedia?.height ?? null,
+              width: prev.aspect.width ?? sourceW,
+              height: prev.aspect.height ?? sourceH,
+              crop: null,
             },
           };
         }
-        return { ...prev, aspect: { ...prev.aspect, ratio } };
+        return { ...prev, aspect: { ...prev.aspect, ratio, crop: null }, aspectPreview: null };
       }),
-    setFrameMode: (frame) => set((prev) => ({ ...prev, aspect: { ...prev.aspect, frame } })),
+    setFrameMode: (frame) => set((prev) => ({ ...prev, aspect: { ...prev.aspect, frame }, aspectPreview: null })),
     setAspectSize: (side, value) =>
       set((prev) => {
         const next = { ...prev.aspect, [side]: value };
-        // With the lock on, the other side follows the source's proportions,
-        // which is what keeps a custom size from becoming a stretch by hand.
-        const sw = prev.localMedia?.width ?? null;
-        const sh = prev.localMedia?.height ?? null;
+        const sw = sourceW;
+        const sh = sourceH;
         if (aspectLocked && value && sw && sh) {
-          if (side === "width") next.height = Math.max(1, Math.round((value * sh) / sw));
-          else next.width = Math.max(1, Math.round((value * sw) / sh));
+          const ratio = lockedFreeformRatio.current ?? sw / sh;
+          if (side === "width") next.height = Math.max(1, Math.round(value / ratio));
+          else next.width = Math.max(1, Math.round(value * ratio));
         }
+        if (next.frame === "fill" && next.ratio === "freeform" && sw && sh && next.width && next.height
+          && next.width >= MIN_DIMENSION && next.height >= MIN_DIMENSION
+          && next.width % 2 === 0 && next.height % 2 === 0
+          && next.width <= sw && next.height <= sh) {
+          const prior = prev.aspect.crop ? cropForSource(prev.aspect.crop, { w: sw, h: sh }) : null;
+          const cx = prior ? prior.x + prior.width / 2 : sw / 2;
+          const cy = prior ? prior.y + prior.height / 2 : sh / 2;
+          const crop = centeredCrop({ w: sw, h: sh }, next.width, next.height);
+          const maxX = sw - crop.width;
+          const maxY = sh - crop.height;
+          crop.x = Math.max(0, Math.min(maxX - maxX % 2, Math.round((cx - crop.width / 2) / 2) * 2));
+          crop.y = Math.max(0, Math.min(maxY - maxY % 2, Math.round((cy - crop.height / 2) / 2) * 2));
+          next.crop = { ...crop, sourceWidth: sw, sourceHeight: sh };
+        } else next.crop = null;
         return { ...prev, aspect: next };
       }),
-    toggleAspectLock: () => setAspectLocked((v) => !v),
+    setCropRect: (crop) => set((prev) => ({
+      ...prev,
+      aspect: {
+        ...prev.aspect,
+        crop: { ...crop, sourceWidth: sourceW ?? crop.sourceWidth, sourceHeight: sourceH ?? crop.sourceHeight },
+        ...(prev.aspect.ratio === "freeform" ? { width: crop.width, height: crop.height } : {}),
+      },
+    })),
+    toggleFlip: (axis) => set((prev) => ({ ...prev, flip: { ...prev.flip, [axis]: !prev.flip[axis] } })),
+    toggleAspectLock: () => {
+      if (!aspectLocked) {
+        lockedFreeformRatio.current = s.aspect.crop
+          ? s.aspect.crop.width / s.aspect.crop.height
+          : s.aspect.width && s.aspect.height ? s.aspect.width / s.aspect.height : null;
+      }
+      setAspectLocked((v) => !v);
+    },
     setLoopSize: (l) => patch({ loopSize: l }),
     setQuality: (q) => patch({ quality: q }),
     toggleSound: () => set((prev) => ({ ...prev, soundEnabled: !prev.soundEnabled })),
@@ -874,6 +965,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
           clipEnabled: false,
           ...trimFields(trim),
           aspect: ASPECT_DEFAULT,
+          flip: FLIP_NONE,
           previewSource: null,
           previewError: null,
         };

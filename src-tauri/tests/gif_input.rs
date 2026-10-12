@@ -392,7 +392,9 @@ fn gif_to_animated_webp_keeps_the_animation() {
 fn a_gif_reframes_through_the_shared_geometry() {
     let dir = scratch("aspect");
     let gif = timed_gif(&dir);
-    let ratio = |r, f| AspectSpec { ratio: r, frame: f, width: None, height: None };
+    let ratio = |r, f| AspectSpec {
+        ratio: r, frame: f, width: None, height: None, crop: None, flip: Default::default(),
+    };
 
     for (spec, name) in [
         (ratio(AspectRatio::R1x1, FrameMode::Fill), "square"),
@@ -407,7 +409,11 @@ fn a_gif_reframes_through_the_shared_geometry() {
         assert!((end - TOTAL).abs() < 0.02, "{name}: reframing changed the timing ({end:.3}s)");
     }
 
-    let free = AspectSpec { ratio: AspectRatio::Freeform, frame: FrameMode::Fit, width: Some(200), height: Some(200) };
+    let free = AspectSpec {
+        ratio: AspectRatio::Freeform, frame: FrameMode::Fit, width: Some(200), height: Some(200),
+        crop: None,
+        flip: Default::default(),
+    };
     let out = encode(&gif, OutputFormat::Webp, None, &free, &dir.join("free.webp"));
     assert_eq!(dims(&out), (200, 200));
 }

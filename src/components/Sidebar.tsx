@@ -20,7 +20,7 @@ export function Sidebar() {
   const { view, available, setView } = useView();
   // While a job runs, finishes or fails, the window is showing that job, not
   // a mode, so no mode is drawn as the current one. Availability is unchanged.
-  const { screen } = useShift();
+  const { screen, saving, reset } = useShift();
   const inJob = screen === "processing" || screen === "complete" || screen === "error";
 
   return (
@@ -36,6 +36,20 @@ export function Sidebar() {
         </span>
         <span className="pointer-events-none text-[9px] leading-none text-shift-quiet">™</span>
       </div>
+
+      <button
+        type="button"
+        aria-keyshortcuts="Meta+N"
+        disabled={saving}
+        onClick={reset}
+        className="mb-4 flex h-8 w-full items-center gap-[9px] rounded-[8px] border border-[var(--hairline-bright)] px-[10px] text-left text-[12.5px] font-medium text-shift-dim transition-[background,color] duration-[140ms] enabled:hover:bg-shift-chip-hi enabled:hover:text-shift-text disabled:opacity-35"
+      >
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true" className="stroke-shift-soft" strokeWidth="1.8" strokeLinecap="round">
+          <path d="M12 5v14M5 12h14" />
+        </svg>
+        New Shift
+        <span aria-hidden="true" className="ml-auto font-mono text-[11px] text-shift-kbd">⌘N</span>
+      </button>
 
       <div className="flex flex-col gap-[2px]">
         {VIEWS.map((item, i) => (
