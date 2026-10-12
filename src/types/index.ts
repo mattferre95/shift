@@ -288,8 +288,10 @@ export interface Health {
 }
 
 export type ExportInput =
-  | { kind: "url"; url: string; quality: string | null }
+  | { kind: "url"; url: string; quality: string | null; browserSession: BrowserSessionMode }
   | { kind: "local"; path: string };
+
+export type BrowserSessionMode = "none" | "chrome";
 
 export interface ExportRequest {
   input: ExportInput;

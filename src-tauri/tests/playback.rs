@@ -116,6 +116,7 @@ fn proxies_decode_and_url_source_is_reused_for_audio_exports() {
         let input = InputSpec::Url {
             url: "https://example.test/media".into(),
             quality: Some("best".into()),
+            browser_session: shift_lib::providers::BrowserSessionMode::None,
         };
         let known = provider
             .analyze(

@@ -51,6 +51,7 @@ import {
   type FrameMode,
   type LoopSize,
   type ExportRequest,
+  type BrowserSessionMode,
   type Health,
   type JobEvent,
   type JobOutput,
@@ -114,6 +115,7 @@ interface ShiftState {
   job: Job | null;
   output: JobOutput | null;
   error: ShiftError | null;
+  browserSession: BrowserSessionMode;
   outputDir: string;
   health: Health | null;
   /** Set when the native layer could not be reached at all. */
@@ -192,6 +194,7 @@ interface ShiftApi extends ShiftState {
   cancel: () => void;
   reset: () => void;
   retry: () => void;
+  retryWithChrome: () => void;
 }
 
 const initial: ShiftState = {
@@ -222,6 +225,7 @@ const initial: ShiftState = {
   job: null,
   output: null,
   error: null,
+  browserSession: "none",
   outputDir: "",
   health: null,
   healthError: null,
@@ -324,14 +328,14 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
 
   // ---- input --------------------------------------------------------------
   const submitUrl = useCallback(
-    (raw: string) => {
+    (raw: string, browserSession: BrowserSessionMode = "none", preserveSettings = false) => {
       const value = raw.trim();
       if (!/^https?:\/\//i.test(value)) return;
       const generation = ++sourceGeneration.current;
       lastInput.current = { kind: "url", value };
-      patch({ analyzing: true, error: null, dragging: false });
+      patch({ analyzing: true, error: null, dragging: false, browserSession });
       ipc
-        .analyzeUrl(value)
+        .analyzeUrl(value, browserSession)
         .then((media) => {
           if (generation !== sourceGeneration.current) return;
           const first = media.mediaItems[0];
@@ -339,30 +343,41 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
           const defaultOut: OutputFormat =
             first.type === "image" ? "JPG" : first.type === "video" ? "MP4" : "MP3";
           const trim = defaultTrimRange(first.duration);
-          set((prev) => ({
-            ...prev,
-            screen: "url",
-            analyzing: false,
-            urlMedia: media,
-            activeMediaIndex: 0,
-            selectedMediaIds: media.mediaItems.map((item) => item.id),
-            localMedia: null,
-            format: defaultOut,
-            quality: first.qualities[0]?.id ?? "best",
-            soundEnabled: true,
-            clipEnabled: false,
-            clipIn: formatTimestamp(trim.start),
-            clipOut: formatTimestamp(trim.end),
-            clipDurationPreset: trim.preset,
-            clipError: null,
-            clipLabel: null,
-            clipSeconds: null,
-            aspect: ASPECT_DEFAULT,
-            flip: FLIP_NONE,
-            previewSource: null,
-            output: null,
-            error: null,
-          }));
+          set((prev) => {
+            const sameSource = preserveSettings && prev.urlMedia?.url === media.url;
+            const activeIndex = sameSource && prev.activeMediaIndex < media.mediaItems.length
+              ? prev.activeMediaIndex : 0;
+            const active = media.mediaItems[activeIndex];
+            const selected = sameSource
+              ? prev.selectedMediaIds.filter((id) => media.mediaItems.some((item) => item.id === id))
+              : [];
+            return {
+              ...prev,
+              screen: "url",
+              analyzing: false,
+              urlMedia: media,
+              activeMediaIndex: activeIndex,
+              selectedMediaIds: sameSource ? selected : media.mediaItems.map((item) => item.id),
+              localMedia: null,
+              format: sameSource && prev.urlMedia?.mediaItems[prev.activeMediaIndex]?.type === active.type
+                ? prev.format : defaultOut,
+              quality: sameSource && active.qualities.some((quality) => quality.id === prev.quality)
+                ? prev.quality : active.qualities[0]?.id ?? "best",
+              soundEnabled: sameSource ? prev.soundEnabled : true,
+              clipEnabled: sameSource ? prev.clipEnabled : false,
+              clipIn: sameSource ? prev.clipIn : formatTimestamp(trim.start),
+              clipOut: sameSource ? prev.clipOut : formatTimestamp(trim.end),
+              clipDurationPreset: sameSource ? prev.clipDurationPreset : trim.preset,
+              clipError: null,
+              clipLabel: null,
+              clipSeconds: null,
+              aspect: sameSource ? prev.aspect : ASPECT_DEFAULT,
+              flip: sameSource ? prev.flip : FLIP_NONE,
+              previewSource: null,
+              output: null,
+              error: null,
+            };
+          });
         })
         .catch((e) => {
           if (generation === sourceGeneration.current)
@@ -390,6 +405,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
             analyzing: false,
             localMedia: media,
             urlMedia: null,
+            browserSession: "none",
             activeMediaIndex: 0,
             selectedMediaIds: [],
             format: media.outputs.includes(defaultOut) ? defaultOut : media.outputs[0],
@@ -460,10 +476,10 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
   // A post with several items downloads its original files and is shown from
   // its thumbnails; nothing plays, so no preview is prepared for it.
   const multiPost = (s.urlMedia?.mediaItems.length ?? 0) > 1;
-  const playbackInput = multiPost
+  const playbackInput = multiPost || s.analyzing
     ? null
     : activeMedia && activeMedia.type !== "image"
-    ? { kind: "url" as const, url: activeMedia.source, quality: s.quality }
+    ? { kind: "url" as const, url: activeMedia.source, quality: s.quality, browserSession: s.browserSession }
     : s.localMedia && s.localMedia.kind !== "image"
       ? { kind: "local" as const, path: s.localMedia.path }
       : null;
@@ -474,6 +490,11 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
     (!!activeMedia && activeMedia.type !== "image") || s.clipEnabled,
     activeMedia,
   );
+  useEffect(() => {
+    if (s.screen === "url" && playback.errorDetails?.code === "youtube_bot_check") {
+      patch({ screen: "error", error: playback.errorDetails });
+    }
+  }, [s.screen, playback.errorDetails, patch]);
   const duration = playback.info?.duration ?? activeMedia?.duration ?? s.localMedia?.duration ?? null;
 
   // Source-quality selection is real for a remote video, where yt-dlp actually
@@ -680,7 +701,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
           },
         });
         setSaving(false);
-        const result = await ipc.downloadPostItems(selectedItems, chosen, id);
+        const result = await ipc.downloadPostItems(selectedItems, chosen, id, s.browserSession);
         if (generation !== sourceGeneration.current) return;
         jobRef.current = null;
         const saved = await ipc.setOutputDir(chosen).catch(() => chosen);
@@ -713,7 +734,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
     }
     const item = selectedItems[0] ?? activeMedia;
     const input: ExportRequest["input"] | null = item
-      ? { kind: "url", url: item.source, quality: s.quality }
+      ? { kind: "url", url: item.source, quality: s.quality, browserSession: s.browserSession }
       : s.localMedia
         ? { kind: "local", path: s.localMedia.path }
         : null;
@@ -773,7 +794,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
     } finally {
       setSaving(false);
     }
-  }, [canExport, saving, s.urlMedia, s.selectedMediaIds, activeMedia, s.localMedia, s.quality, s.format, s.soundEnabled, s.clipEnabled, s.clipIn, s.clipOut, s.outputDir, s.compression, s.loopSize, s.aspect, s.flip, duration, isImage, isLoop, showAspect, patch]);
+  }, [canExport, saving, s.urlMedia, s.selectedMediaIds, activeMedia, s.localMedia, s.quality, s.browserSession, s.format, s.soundEnabled, s.clipEnabled, s.clipIn, s.clipOut, s.outputDir, s.compression, s.loopSize, s.aspect, s.flip, duration, isImage, isLoop, showAspect, patch]);
 
   const cancel = useCallback(() => {
     const id = s.job?.id ?? jobRef.current;
@@ -810,9 +831,16 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
       reset();
       return;
     }
-    if (last.kind === "url") submitUrl(last.value);
+    if (last.kind === "url") submitUrl(last.value, s.browserSession);
     else acceptFile(last.value);
-  }, [reset, submitUrl, acceptFile]);
+  }, [reset, submitUrl, acceptFile, s.browserSession]);
+
+  const retryWithChrome = useCallback(() => {
+    const last = lastInput.current;
+    if (last?.kind === "url" && (s.error?.code === "youtube_bot_check" || playback.errorCode === "youtube_bot_check") && s.browserSession === "none") {
+      submitUrl(last.value, "chrome", true);
+    }
+  }, [submitUrl, s.error, s.browserSession, playback.errorCode]);
 
 
   const api: ShiftApi = {
@@ -1032,6 +1060,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
     cancel,
     reset,
     retry,
+    retryWithChrome,
   };
 
   return <Ctx.Provider value={api}>{children}</Ctx.Provider>;

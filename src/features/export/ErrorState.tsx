@@ -8,15 +8,19 @@ import { useShift } from "@/state/shift";
  * from the native layer stays folded away behind Technical details (JOB-05).
  */
 export function ErrorState({ during = "input" }: { during?: "input" | "export" }) {
-  const { error, retry, reset, openFilePicker, lastInput, urlMedia } = useShift();
+  const { error, browserSession, retry, retryWithChrome, reset, openFilePicker, lastInput, urlMedia } = useShift();
   const [open, setOpen] = useState(false);
   const code = error?.code ?? "";
   const icon = code === "private_post" ? LOCK : code === "missing_binary" ? PLUG : ALERT;
   const isFile = lastInput?.kind === "file";
+  const chromeChallenge = code === "youtube_bot_check" && browserSession === "none" && lastInput?.kind === "url";
+  const chromeAttemptFailed = browserSession === "chrome";
   // What failed, in a few words. `retry` repeats the last input, not an
   // export, so after a failed export it is offered as reopening the source.
   const eyebrow =
-    during === "export"
+    code === "youtube_bot_check"
+      ? "Couldn't open this link"
+    : during === "export"
       ? (urlMedia?.mediaItems.length ?? 0) > 1
         ? "Download failed"
         : "Export failed"
@@ -58,18 +62,28 @@ export function ErrorState({ during = "input" }: { during?: "input" | "export" }
               if (lastInput?.kind === "file") openFilePicker();
             }}
           >
-            {lastInput?.kind === "url"
+            {chromeChallenge || chromeAttemptFailed
+              ? "Start Over"
+              : lastInput?.kind === "url"
               ? "Paste Another Link"
               : lastInput?.kind === "file"
                 ? "Choose Another File…"
                 : "Start Over"}
           </Button>
-          {lastInput && (
+          {chromeChallenge ? (
+            <Button variant="primary" onClick={retryWithChrome}>Retry with Chrome</Button>
+          ) : lastInput && !chromeAttemptFailed ? (
             <Button variant="primary" onClick={retry}>
               {retryLabel}
             </Button>
-          )}
+          ) : null}
         </div>
+
+        {chromeChallenge && (
+          <p className="m-0 max-w-[380px] text-[12px] leading-[1.5] text-shift-dim">
+            Uses your local Chrome session for this request. SHIFT does not store your cookies.
+          </p>
+        )}
 
         {error?.technical && (
           <Button variant="text" className="mt-2 text-[12.5px]" aria-expanded={open} onClick={() => setOpen((v) => !v)}>

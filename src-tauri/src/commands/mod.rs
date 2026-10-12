@@ -12,7 +12,7 @@ use crate::media::preview;
 use crate::media::profiles::LoopSize;
 use crate::media::{ffprobe::probe, profiles};
 use crate::process::CancelToken;
-use crate::providers::{self, DownloadKind, PostMedia, PostMediaType, UrlMedia};
+use crate::providers::{self, BrowserSessionMode, DownloadKind, PostMedia, PostMediaType, UrlMedia};
 use crate::settings::SettingsStore;
 use crate::validation;
 use serde::{Deserialize, Serialize};
@@ -53,10 +53,10 @@ pub struct LocalMedia {
 }
 
 #[tauri::command]
-pub async fn analyze_url(url: String) -> Result<UrlMedia> {
+pub async fn analyze_url(url: String, browser_session: BrowserSessionMode) -> Result<UrlMedia> {
     tauri::async_runtime::spawn_blocking(move || {
         let parsed = validation::validate_url(&url)?;
-        let provider = providers::for_url(&parsed)
+        let provider = providers::for_url_with_session(&parsed, browser_session)
             .ok_or_else(|| ShiftError::new("no_provider", "SHIFT can't handle this link."))?;
         let cache = std::env::temp_dir()
             .join("SHIFT")
@@ -81,6 +81,8 @@ pub struct PostDownloadRequest {
     pub job_id: String,
     pub items: Vec<PostMedia>,
     pub destination_dir: String,
+    #[serde(default)]
+    pub browser_session: BrowserSessionMode,
 }
 
 #[derive(Debug, Serialize)]
@@ -116,7 +118,7 @@ pub async fn download_post_items(
         let mut acquired_items = Vec::with_capacity(request.items.len());
         for (index, item) in request.items.iter().enumerate() {
             let source = validation::validate_url(&item.source)?;
-            let provider = providers::for_url(&source)
+            let provider = providers::for_url_with_session(&source, request.browser_session)
                 .ok_or_else(|| ShiftError::new("no_provider", "SHIFT can't handle this media."))?;
             let item_dir = temp.sub(&format!("item-{index}"))?;
             let kind = match item.media_type {

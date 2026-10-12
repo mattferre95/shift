@@ -16,6 +16,7 @@ import type {
   PostDownloadResult,
   PostMedia,
   UrlMedia,
+  BrowserSessionMode,
 } from "@/types";
 
 const JOB_EVENT = "shift://job";
@@ -37,10 +38,11 @@ export interface PlaybackEvent {
   detail: string | null;
 }
 
-export const analyzeUrl = (url: string) => invoke<UrlMedia>("analyze_url", { url });
-export const downloadPostItems = (items: PostMedia[], destinationDir: string, jobId: string) =>
+export const analyzeUrl = (url: string, browserSession: BrowserSessionMode = "none") =>
+  invoke<UrlMedia>("analyze_url", { url, browserSession });
+export const downloadPostItems = (items: PostMedia[], destinationDir: string, jobId: string, browserSession: BrowserSessionMode) =>
   invoke<PostDownloadResult>("download_post_items", {
-    request: { items, destinationDir, jobId },
+    request: { items, destinationDir, jobId, browserSession },
   });
 
 export const analyzeFile = (path: string) => invoke<LocalMedia>("analyze_file", { path });

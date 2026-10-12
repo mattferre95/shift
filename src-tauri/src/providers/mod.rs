@@ -12,6 +12,15 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use url::Url;
 
+/// Browser access is opt-in for one loaded URL, never a saved preference.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BrowserSessionMode {
+    #[default]
+    None,
+    Chrome,
+}
+
 /// One selectable source quality.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -107,7 +116,14 @@ pub trait UrlProvider: Send + Sync {
 
 /// The provider registry. One entry today, ordered by specificity later.
 pub fn for_url(url: &Url) -> Option<Box<dyn UrlProvider>> {
-    let ytdlp = ytdlp::YtDlpProvider::new();
+    for_url_with_session(url, BrowserSessionMode::None)
+}
+
+pub fn for_url_with_session(
+    url: &Url,
+    browser_session: BrowserSessionMode,
+) -> Option<Box<dyn UrlProvider>> {
+    let ytdlp = ytdlp::YtDlpProvider::with_session(browser_session);
     if ytdlp.handles(url) {
         return Some(Box::new(ytdlp));
     }

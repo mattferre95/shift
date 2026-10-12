@@ -110,12 +110,14 @@ impl PlaybackRegistry {
                     InputSpec::Url {
                         url: a,
                         quality: aq,
+                        browser_session: am,
                     },
                     InputSpec::Url {
                         url: b,
                         quality: bq,
+                        browser_session: bm,
                     },
-                ) => a == b && (audio_only || aq == bq),
+                ) => a == b && am == bm && (audio_only || aq == bq),
                 _ => false,
             };
             if !matches || s.cancel.is_cancelled() {
@@ -184,10 +186,10 @@ impl PlaybackRegistry {
                         .into_owned();
                     (p, title, true)
                 }
-                InputSpec::Url { url, quality } => {
+                InputSpec::Url { url, quality, browser_session } => {
                     on_stage(PlaybackStage::ResolvingLink, None);
                     let parsed = validation::validate_url(url)?;
-                    let resolved = providers::for_url(&parsed).ok_or_else(|| {
+                    let resolved = providers::for_url_with_session(&parsed, *browser_session).ok_or_else(|| {
                         ShiftError::new("no_provider", "SHIFT can't handle this link.")
                     })?;
                     let provider = provider.unwrap_or(resolved.as_ref());

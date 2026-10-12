@@ -7,9 +7,9 @@
 //! Public social posts need one extra metadata step so ordered image and mixed
 //! media entries are not discarded by extractors that expose only video.
 
-use super::{DownloadKind, PostMedia, PostMediaType, QualityOption, UrlMedia, UrlProvider};
+use super::{BrowserSessionMode, DownloadKind, PostMedia, PostMediaType, QualityOption, UrlMedia, UrlProvider};
 use crate::errors::{Result, ShiftError};
-use crate::process::{resolve, run, run_capture, Binary, CancelToken};
+use crate::process::{resolve, run, run_capture, Binary, CancelToken, ProcOutput};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -33,11 +33,59 @@ const LADDER: [(u32, &str); 5] = [
     (480, "480p"),
 ];
 
-pub struct YtDlpProvider;
+pub struct YtDlpProvider {
+    browser_session: BrowserSessionMode,
+}
 
 impl YtDlpProvider {
     pub fn new() -> Self {
-        Self
+        Self::with_session(BrowserSessionMode::None)
+    }
+
+    pub fn with_session(browser_session: BrowserSessionMode) -> Self {
+        Self { browser_session }
+    }
+}
+
+/// The sole place that adds browser-session arguments to yt-dlp commands.
+fn command_args(mode: BrowserSessionMode, mut args: Vec<String>) -> Vec<String> {
+    if mode == BrowserSessionMode::Chrome {
+        args.splice(0..0, ["--cookies-from-browser".into(), "chrome".into()]);
+    }
+    args
+}
+
+fn diagnostic_log(out: &ProcOutput, mode: BrowserSessionMode) -> String {
+    let log = out.log();
+    if mode == BrowserSessionMode::None {
+        return log;
+    }
+    log.lines()
+        .map(|line| {
+            let lower = line.to_ascii_lowercase();
+            if lower.contains("cookie:") || lower.contains("set-cookie") || lower.contains("cookie value") {
+                "[cookie details omitted]"
+            } else {
+                line
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn ensure_browser_session(mode: BrowserSessionMode) -> Result<()> {
+    if mode != BrowserSessionMode::Chrome {
+        return Ok(());
+    }
+    let user_app = dirs::home_dir().map(|home| home.join("Applications/Google Chrome.app"));
+    if Path::new("/Applications/Google Chrome.app").is_dir()
+        || user_app.as_ref().is_some_and(|path| path.is_dir())
+    {
+        Ok(())
+    } else {
+        Err(ShiftError::new("chrome_session_unavailable", "Couldn't use the Chrome session.")
+            .hint("Chrome isn't installed in Applications on this Mac.")
+            .technical("Google Chrome.app was not found in /Applications or ~/Applications."))
     }
 }
 
@@ -55,6 +103,7 @@ struct RawInfo {
     ext: Option<String>,
     formats: Option<Vec<RawFormat>>,
     entries: Option<Vec<Option<RawInfo>>>,
+    availability: Option<String>,
     #[serde(rename = "_type")]
     kind: Option<String>,
 }
@@ -75,13 +124,14 @@ impl UrlProvider for YtDlpProvider {
     }
 
     fn analyze(&self, url: &Url, cache: &Path, cancel: &CancelToken) -> Result<UrlMedia> {
+        ensure_browser_session(self.browser_session)?;
         let platform = platform_for(url);
         // X's extractor deliberately discards photos. Its dumped public API
         // response contains the complete ordered media array, including video,
         // so use that single response first rather than resolving a mixed post
         // twice and returning only its moving items.
         if platform == "X" {
-            if let Some(post) = public_fallback(url, cache, cancel, &platform)? {
+            if let Some(post) = public_fallback(url, cache, cancel, &platform, self.browser_session)? {
                 return Ok(post);
             }
         }
@@ -93,11 +143,12 @@ impl UrlProvider for YtDlpProvider {
             "20".into(),
             url.as_str().into(),
         ];
-        let out = run_capture(Binary::YtDlp, &args, cancel)?;
+        let out = run_capture(Binary::YtDlp, &command_args(self.browser_session, args), cancel)?;
         let direct = if out.success {
-            serde_json::from_str::<RawInfo>(out.stdout.trim())
-                .ok()
-                .and_then(|info| post_from_ytdlp(url, cache, cancel, info).ok())
+            match serde_json::from_str::<RawInfo>(out.stdout.trim()) {
+                Ok(info) => Some(post_from_ytdlp(url, cache, cancel, info, self.browser_session)?),
+                Err(_) => None,
+            }
         } else {
             None
         };
@@ -115,7 +166,7 @@ impl UrlProvider for YtDlpProvider {
                 .as_ref()
                 .is_some_and(|post| post.media_items.len() > 1);
         if needs_fallback || inspect_carousel {
-            if let Some(post) = public_fallback(url, cache, cancel, &platform)? {
+            if let Some(post) = public_fallback(url, cache, cancel, &platform, self.browser_session)? {
                 if needs_fallback
                     || direct
                         .as_ref()
@@ -125,7 +176,7 @@ impl UrlProvider for YtDlpProvider {
                 }
             }
         }
-        direct.ok_or_else(|| social_error(&platform, out.log()))
+        direct.ok_or_else(|| ytdlp_error(url, &platform, diagnostic_log(&out, self.browser_session), self.browser_session, false))
     }
 
     fn download(
@@ -137,75 +188,8 @@ impl UrlProvider for YtDlpProvider {
         cancel: &CancelToken,
         on_progress: &mut dyn FnMut(Option<f64>),
     ) -> Result<PathBuf> {
-        let selector = match kind {
-            DownloadKind::Image => None,
-            DownloadKind::Audio => Some("bestaudio/best".to_string()),
-            DownloadKind::Video => Some(match quality_id.parse::<u32>() {
-                Ok(h) => format!("bv*[height<={h}]+ba/b[height<={h}]/bv*+ba/b"),
-                Err(_) => "bv*+ba/b".to_string(),
-            }),
-            // A small progressive MP4 reaches WebKit much sooner when a
-            // provider offers one. Some providers expose only separate video
-            // and audio streams, so retain a height-limited merged fallback.
-            // The playback layer proxies only if probe shows that WebKit
-            // cannot decode what was returned.
-            DownloadKind::PreviewVideo => Some(
-                "b[ext=mp4][protocol=https][height<=540]/b[ext=mp4][height<=540]/bv*[height<=540]+ba/b[height<=540]/bv*+ba/b"
-                    .to_string(),
-            ),
-            DownloadKind::PreviewAudio => Some("ba[ext=m4a]/ba[ext=mp4]/ba/b".to_string()),
-        };
-
-        let mut args: Vec<String> = vec![
-            "--no-playlist".into(),
-            "--no-warnings".into(),
-            "--newline".into(),
-            "--no-colors".into(),
-            "--progress".into(),
-            "--progress-template".into(),
-            PROGRESS_TEMPLATE.into(),
-            "--socket-timeout".into(),
-            "20".into(),
-            "--retries".into(),
-            "3".into(),
-            "--concurrent-fragments".into(),
-            "4".into(),
-        ];
-        if let Some(selector) = selector {
-            args.push("-f".into());
-            args.push(selector);
-        }
-        args.push("-o".into());
-        args.push(
-            dest_dir
-                .join("source.%(ext)s")
-                .to_string_lossy()
-                .to_string(),
-        );
-        if matches!(kind, DownloadKind::Video | DownloadKind::PreviewVideo) {
-            // Give the muxer a container that always accepts the merged streams.
-            args.push("--merge-output-format".into());
-            args.push(
-                if kind == DownloadKind::PreviewVideo {
-                    "mp4"
-                } else {
-                    "mkv"
-                }
-                .into(),
-            );
-        }
-        // Point yt-dlp at the same FFmpeg SHIFT ships, never at whatever is on PATH.
-        if let Ok(ffmpeg) = resolve(Binary::Ffmpeg) {
-            if let Some(dir) = ffmpeg.parent() {
-                args.push("--ffmpeg-location".into());
-                args.push(dir.to_string_lossy().to_string());
-            }
-        }
-        if let Some(referer) = referer_for(url) {
-            args.push("--referer".into());
-            args.push(referer.into());
-        }
-        args.push(url.as_str().to_string());
+        ensure_browser_session(self.browser_session)?;
+        let args = download_args(url, kind, quality_id, dest_dir, self.browser_session);
 
         let mut on_stdout = |line: &str| {
             if let Some(fraction) = parse_progress(line) {
@@ -214,15 +198,94 @@ impl UrlProvider for YtDlpProvider {
         };
         let out = run(Binary::YtDlp, &args, cancel, Some(&mut on_stdout), None)?;
         if !out.success {
-            return Err(ShiftError::download_failed(out.log()));
+            return Err(ytdlp_error(url, &platform_for(url), diagnostic_log(&out, self.browser_session), self.browser_session, true));
         }
         find_downloaded(dest_dir).ok_or_else(|| {
             ShiftError::download_failed(format!(
                 "yt-dlp reported success but produced no file: {}",
-                out.log()
+                diagnostic_log(&out, self.browser_session)
             ))
         })
     }
+}
+
+fn download_args(
+    url: &Url,
+    kind: DownloadKind,
+    quality_id: &str,
+    dest_dir: &Path,
+    browser_session: BrowserSessionMode,
+) -> Vec<String> {
+    let selector = match kind {
+        DownloadKind::Image => None,
+        DownloadKind::Audio => Some("bestaudio/best".to_string()),
+        DownloadKind::Video => Some(match quality_id.parse::<u32>() {
+            Ok(h) => format!("bv*[height<={h}]+ba/b[height<={h}]/bv*+ba/b"),
+            Err(_) => "bv*+ba/b".to_string(),
+        }),
+        // A small progressive MP4 reaches WebKit much sooner when a
+        // provider offers one. Some providers expose only separate video
+        // and audio streams, so retain a height-limited merged fallback.
+        // The playback layer proxies only if probe shows that WebKit
+        // cannot decode what was returned.
+        DownloadKind::PreviewVideo => Some(
+            "b[ext=mp4][protocol=https][height<=540]/b[ext=mp4][height<=540]/bv*[height<=540]+ba/b[height<=540]/bv*+ba/b"
+                .to_string(),
+        ),
+        DownloadKind::PreviewAudio => Some("ba[ext=m4a]/ba[ext=mp4]/ba/b".to_string()),
+    };
+
+    let mut args: Vec<String> = vec![
+        "--no-playlist".into(),
+        "--no-warnings".into(),
+        "--newline".into(),
+        "--no-colors".into(),
+        "--progress".into(),
+        "--progress-template".into(),
+        PROGRESS_TEMPLATE.into(),
+        "--socket-timeout".into(),
+        "20".into(),
+        "--retries".into(),
+        "3".into(),
+        "--concurrent-fragments".into(),
+        "4".into(),
+    ];
+    if let Some(selector) = selector {
+        args.push("-f".into());
+        args.push(selector);
+    }
+    args.push("-o".into());
+    args.push(
+        dest_dir
+            .join("source.%(ext)s")
+            .to_string_lossy()
+            .to_string(),
+    );
+    if matches!(kind, DownloadKind::Video | DownloadKind::PreviewVideo) {
+        // Give the muxer a container that always accepts the merged streams.
+        args.push("--merge-output-format".into());
+        args.push(
+            if kind == DownloadKind::PreviewVideo {
+                "mp4"
+            } else {
+                "mkv"
+            }
+            .into(),
+        );
+    }
+    // Point yt-dlp at the same FFmpeg SHIFT ships, never at whatever is on PATH.
+    if let Ok(ffmpeg) = resolve(Binary::Ffmpeg) {
+        if let Some(dir) = ffmpeg.parent() {
+            args.push("--ffmpeg-location".into());
+            args.push(dir.to_string_lossy().to_string());
+        }
+    }
+    if let Some(referer) = referer_for(url) {
+        args.push("--referer".into());
+        args.push(referer.into());
+    }
+    args.push(url.as_str().to_string());
+    command_args(browser_session, args)
 }
 
 fn post_from_ytdlp(
@@ -230,7 +293,12 @@ fn post_from_ytdlp(
     cache: &Path,
     cancel: &CancelToken,
     info: RawInfo,
+    browser_session: BrowserSessionMode,
 ) -> Result<UrlMedia> {
+    if restricted_availability(&info) {
+        return Err(ShiftError::new("private_post", "This post is private.")
+            .hint("SHIFT only supports public media."));
+    }
     let platform = platform_for(url);
     let title = info
         .title
@@ -266,7 +334,7 @@ fn post_from_ytdlp(
         };
         let (width, height) = source_size(&raw, &formats);
         let thumb = raw.thumbnail.as_deref().and_then(|source| {
-            fetch_thumbnail(source, &cache.join(format!("item-{index}")), cancel)
+            fetch_thumbnail(source, &cache.join(format!("item-{index}")), cancel, browser_session)
                 .ok()
                 .flatten()
         });
@@ -293,11 +361,21 @@ fn post_from_ytdlp(
     })
 }
 
+fn restricted_availability(info: &RawInfo) -> bool {
+    matches!(
+        info.availability.as_deref(),
+        Some("private" | "premium_only" | "subscriber_only" | "needs_auth")
+    ) || info.entries.as_ref().is_some_and(|entries| {
+        entries.iter().flatten().any(restricted_availability)
+    })
+}
+
 fn public_fallback(
     url: &Url,
     cache: &Path,
     cancel: &CancelToken,
     platform: &str,
+    browser_session: BrowserSessionMode,
 ) -> Result<Option<UrlMedia>> {
     if !is_social(platform) {
         return Ok(None);
@@ -310,7 +388,7 @@ fn public_fallback(
         "20".into(),
         url.as_str().into(),
     ];
-    let out = run_capture(Binary::YtDlp, &args, cancel)?;
+    let out = run_capture(Binary::YtDlp, &command_args(browser_session, args), cancel)?;
     let docs = dumped_json(&out.stdout);
     let mut items = match platform {
         "X" => extract_x(&docs),
@@ -332,7 +410,7 @@ fn public_fallback(
         ));
         if let Some(source) = item.thumbnail_path.take() {
             item.thumbnail_path =
-                fetch_thumbnail(&source, &cache.join(format!("item-{index}")), cancel)
+                fetch_thumbnail(&source, &cache.join(format!("item-{index}")), cancel, browser_session)
                     .ok()
                     .flatten()
                     .map(|v| v.to_string_lossy().into_owned());
@@ -750,6 +828,11 @@ fn social_error(platform: &str, technical: String) -> ShiftError {
         return ShiftError::fetch_failed(technical);
     }
     let lower = technical.to_ascii_lowercase();
+    if lower.contains("private") {
+        return ShiftError::new("private_post", "This post is private.")
+            .hint("SHIFT only supports public media.")
+            .technical(technical);
+    }
     if lower.contains("sign in")
         || lower.contains("login")
         || lower.contains("not available to everyone")
@@ -761,19 +844,65 @@ fn social_error(platform: &str, technical: String) -> ShiftError {
         .hint("SHIFT supports public posts that open without an account.")
         .technical(technical);
     }
-    if lower.contains("private") {
-        return ShiftError::new("private_post", "This post is private.")
-            .hint("SHIFT only supports public media.")
-            .technical(technical);
-    }
     ShiftError::new("no_post_media", "No downloadable media was found.")
         .hint(if is_social(platform) {
             format!("{platform} may have changed its public media format, or the post may be unavailable.")
         } else { "Check the link and try again.".into() }).technical(technical)
 }
+
+fn ytdlp_error(
+    url: &Url,
+    platform: &str,
+    technical: String,
+    mode: BrowserSessionMode,
+    download: bool,
+) -> ShiftError {
+    let lower = technical.to_ascii_lowercase();
+    if mode == BrowserSessionMode::Chrome && chrome_cookie_failure(&lower)
+    {
+        return ShiftError::new("chrome_session_unavailable", "Couldn't use the Chrome session.")
+            .hint("Check that Chrome has a usable local session, then start over.")
+            .technical(technical);
+    }
+    if is_youtube(url) {
+        if lower.contains("private video") || lower.contains("video is private") || lower.contains("members-only") || lower.contains("members only") {
+            return ShiftError::new("private_post", "This post is private.")
+                .hint("SHIFT only supports public media.")
+                .technical(technical);
+        }
+        if lower.contains("sign in to confirm") && lower.contains("not a bot") {
+            return ShiftError::new("youtube_bot_check", "YouTube wants browser verification.")
+                .hint("YouTube is asking SHIFT to verify this request through a browser session.")
+                .technical(technical);
+        }
+    }
+    if download {
+        ShiftError::download_failed(technical)
+    } else {
+        social_error(platform, technical)
+    }
+}
+
+fn chrome_cookie_failure(technical: &str) -> bool {
+    technical.lines().any(|line| {
+        let failure = line.contains("could not")
+            || line.contains("failed")
+            || line.contains("unable")
+            || line.contains("permission denied");
+        let store = (line.contains("cookie")
+            && (line.contains("database") || line.contains("extract") || line.contains("decrypt")))
+            || line.contains("chrome profile")
+            || line.contains("keyring");
+        failure && store
+    })
+}
+
+fn is_youtube(url: &Url) -> bool {
+    matches!(url.host_str(), Some("youtube.com" | "www.youtube.com" | "m.youtube.com" | "youtu.be"))
+}
 /// Pull a thumbnail down through the backend instead of exposing its remote
 /// host to the webview. Each post item receives its own cache directory.
-fn fetch_thumbnail(source: &str, cache: &Path, cancel: &CancelToken) -> Result<Option<PathBuf>> {
+fn fetch_thumbnail(source: &str, cache: &Path, cancel: &CancelToken, browser_session: BrowserSessionMode) -> Result<Option<PathBuf>> {
     std::fs::create_dir_all(cache).ok();
     let mut args = vec![
         "--no-playlist".into(),
@@ -789,7 +918,7 @@ fn fetch_thumbnail(source: &str, cache: &Path, cancel: &CancelToken) -> Result<O
     }
     args.push(source.into());
     // A missing thumbnail is cosmetic; never fail analysis over it.
-    let _ = run_capture(Binary::YtDlp, &args, cancel);
+    let _ = run_capture(Binary::YtDlp, &command_args(browser_session, args), cancel);
     for ext in ["jpg", "jpeg", "png", "webp"] {
         let path = cache.join(format!("thumb.{ext}"));
         if path.is_file() {
@@ -848,6 +977,62 @@ fn parse_progress(line: &str) -> Option<Option<f64>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn browser_session_arguments_are_opt_in_for_analysis_and_download() {
+        let url = Url::parse("https://www.youtube.com/watch?v=mKaioltf6Os").unwrap();
+        let normal = command_args(BrowserSessionMode::None, vec!["--dump-single-json".into(), url.to_string()]);
+        assert!(!normal.iter().any(|arg| arg == "--cookies-from-browser"));
+        let chrome = command_args(BrowserSessionMode::Chrome, vec!["--dump-single-json".into(), url.to_string()]);
+        assert_eq!(&chrome[..2], ["--cookies-from-browser", "chrome"]);
+        assert_eq!(chrome.iter().filter(|arg| *arg == "--cookies-from-browser").count(), 1);
+
+        for kind in [DownloadKind::PreviewVideo, DownloadKind::Video, DownloadKind::Audio] {
+            let args = download_args(&url, kind, "best", Path::new("/tmp/shift-test"), BrowserSessionMode::Chrome);
+            assert_eq!(&args[..2], ["--cookies-from-browser", "chrome"]);
+            assert_eq!(args.iter().filter(|arg| *arg == "--cookies-from-browser").count(), 1);
+            assert!(!args.join(" ").contains("COOKIE_SECRET"));
+        }
+    }
+
+    #[test]
+    fn youtube_bot_check_is_specific_and_private_media_stays_private() {
+        let youtube = Url::parse("https://www.youtube.com/watch?v=mKaioltf6Os").unwrap();
+        let bot = "exit status 1\nERROR: [youtube] mKaioltf6Os: Sign in to confirm you’re not a bot. Use --cookies-from-browser";
+        let error = ytdlp_error(&youtube, "YouTube", bot.into(), BrowserSessionMode::None, false);
+        assert_eq!(error.code, "youtube_bot_check");
+        assert!(error.technical.as_deref().unwrap().contains("Sign in to confirm"));
+        assert_eq!(ytdlp_error(&youtube, "YouTube", "exit status 1\nnetwork timeout".into(), BrowserSessionMode::None, false).code, "fetch_failed");
+        assert_eq!(ytdlp_error(&youtube, "YouTube", "ERROR: Private video. Sign in".into(), BrowserSessionMode::None, false).code, "private_post");
+        assert_eq!(social_error("Instagram", "Private post. Sign in".into()).code, "private_post");
+        let other = Url::parse("https://example.com/video").unwrap();
+        assert_ne!(ytdlp_error(&other, "Other", bot.into(), BrowserSessionMode::None, false).code, "youtube_bot_check");
+    }
+
+    #[test]
+    fn chrome_cookie_failures_are_clear_and_cookie_values_are_not_logged() {
+        let url = Url::parse("https://www.youtube.com/watch?v=mKaioltf6Os").unwrap();
+        let error = ytdlp_error(&url, "YouTube", "ERROR: Could not copy Chrome cookie database".into(), BrowserSessionMode::Chrome, false);
+        assert_eq!(error.code, "chrome_session_unavailable");
+        let out = ProcOutput {
+            success: false,
+            code: Some(1),
+            stdout: String::new(),
+            stderr: "ERROR: Could not copy Chrome cookie database\nCookie: SID=COOKIE_SECRET".into(),
+        };
+        let technical = diagnostic_log(&out, BrowserSessionMode::Chrome);
+        assert!(technical.contains("Could not copy Chrome cookie database"));
+        assert!(!technical.contains("COOKIE_SECRET"));
+    }
+
+    #[test]
+    fn metadata_marked_private_is_rejected() {
+        let info: RawInfo = serde_json::from_str(r#"{"availability":"private","title":"Private video"}"#).unwrap();
+        assert!(restricted_availability(&info));
+        let url = Url::parse("https://www.youtube.com/watch?v=mKaioltf6Os").unwrap();
+        let error = post_from_ytdlp(&url, Path::new("/tmp"), &CancelToken::new(), info, BrowserSessionMode::None).err().unwrap();
+        assert_eq!(error.code, "private_post");
+    }
 
     #[test]
     fn reads_a_known_total() {

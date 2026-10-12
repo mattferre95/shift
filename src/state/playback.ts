@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as ipc from "@/lib/ipc";
-import type { ExportRequest, PostMedia } from "@/types";
+import type { ExportRequest, PostMedia, ShiftError } from "@/types";
 
 export interface PlaybackInfo {
   path: string;
@@ -20,6 +20,8 @@ interface PlaybackState {
   info: PlaybackInfo | null;
   busy: boolean;
   error: string | null;
+  errorCode?: string;
+  errorDetails?: ShiftError;
   status: PlaybackStatus | null;
   timings: PlaybackTimings;
 }
@@ -38,7 +40,7 @@ export function usePlayback(
   // Preview quality is independent from export quality. A URL gets one
   // lightweight player asset and output/quality chip changes reuse it.
   const key = input?.kind === "url"
-    ? JSON.stringify({ kind: input.kind, url: input.url })
+    ? JSON.stringify({ kind: input.kind, url: input.url, browserSession: input.browserSession })
     : JSON.stringify(input);
   const requested = useRef<string | null>(null);
   const previousKey = useRef(key);
@@ -80,14 +82,15 @@ export function usePlayback(
         session.current = created;
         const info = await ipc.preparePlayback(created, false);
         if (current === generation.current) {
-          set((s) => ({ ...s, key, info, busy: false, error: null, status: "preparing" }));
+          set((s) => ({ ...s, key, info, busy: false, error: null, errorCode: undefined, errorDetails: undefined, status: "preparing" }));
         }
       };
       void start().catch((e) => {
         if (id) void ipc.releasePlayback(id);
         if (current === generation.current) {
           session.current = null;
-          set({ key, info: null, busy: false, error: ipc.toShiftError(e).message, status: null, timings: {} });
+          const error = ipc.toShiftError(e);
+          set({ key, info: null, busy: false, error: error.message, errorCode: error.code, errorDetails: error, status: null, timings: {} });
         }
       });
     }
@@ -105,7 +108,7 @@ export function usePlayback(
     ++generation.current;
     if (session.current) void ipc.releasePlayback(session.current);
     session.current = null;
-    set({ key, info: null, busy: false, error: "Preview cancelled. Export is still available.", status: null, timings: {} });
+    set({ key, info: null, busy: false, error: "Preview cancelled. Export is still available.", errorCode: undefined, status: null, timings: {} });
   }, [key]);
 
   const fallback = useCallback(async () => {
@@ -116,15 +119,16 @@ export function usePlayback(
       return;
     }
     const current = generation.current;
-    set((s) => ({ ...s, info: null, busy: true, error: null, status: "preparing" }));
+    set((s) => ({ ...s, info: null, busy: true, error: null, errorCode: undefined, errorDetails: undefined, status: "preparing" }));
     try {
       const info = await ipc.preparePlayback(id, true);
       if (current === generation.current) {
-        set((s) => ({ ...s, key, info, busy: false, error: null, status: "preparing" }));
+        set((s) => ({ ...s, key, info, busy: false, error: null, errorCode: undefined, errorDetails: undefined, status: "preparing" }));
       }
     } catch (e) {
       if (current === generation.current) {
-        set((s) => ({ ...s, key, info: null, busy: false, error: ipc.toShiftError(e).message, status: null }));
+        const error = ipc.toShiftError(e);
+        set((s) => ({ ...s, key, info: null, busy: false, error: error.message, errorCode: error.code, errorDetails: error, status: null }));
       }
     }
   }, [key, state.busy, state.info]);
@@ -134,8 +138,8 @@ export function usePlayback(
     set((s) => ({ ...s, status: "ready", timings: { ...s.timings, playerReady: elapsed } }));
   }, []);
 
-  const current = state.key === key
+  const current: PlaybackState = state.key === key
     ? state
-    : { info: null, busy: active, error: null, status: active ? "resolving" as const : null, timings: {} };
+    : { key, info: null, busy: active, error: null, status: active ? "resolving" : null, timings: {} };
   return { ...current, cancel, fallback, markReady, retry: () => retry((n) => n + 1) };
 }

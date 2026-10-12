@@ -14,7 +14,7 @@ use crate::media::{
     profiles::{self, LoopSize, OutputFormat},
 };
 use crate::process::{Binary, CancelToken};
-use crate::providers::{self, DownloadKind};
+use crate::providers::{self, BrowserSessionMode, DownloadKind};
 use crate::settings::SettingsStore;
 use crate::validation::{self, ClipRange};
 use serde::{Deserialize, Serialize};
@@ -82,6 +82,8 @@ pub enum InputSpec {
     Url {
         url: String,
         quality: Option<String>,
+        #[serde(default)]
+        browser_session: BrowserSessionMode,
     },
     Local {
         path: String,
@@ -652,6 +654,7 @@ mod tests {
             input: InputSpec::Url {
                 url: "https://example.com/x?id=123".into(),
                 quality: None,
+                browser_session: BrowserSessionMode::None,
             },
             format: OutputFormat::Mp3,
             clip: clip("02:52.000", "02:56.000"),
@@ -681,6 +684,7 @@ mod tests {
         r.input = InputSpec::Url {
             url: "https://www.youtube.com/watch?v=8m91-gu-x8U".into(),
             quality: None,
+            browser_session: BrowserSessionMode::None,
         };
         r.source_title = Some("Empty Room Ambient Noise Sound Effect".into());
         r.source_hint = Some("youtube-post.mp4".into());
@@ -737,6 +741,7 @@ mod tests {
         r.input = InputSpec::Url {
             url: "https://www.youtube.com/watch?v=8m91-gu-x8U".into(),
             quality: None,
+            browser_session: BrowserSessionMode::None,
         };
         r.source_duration = Some(60.0);
         r.source_title = Some("Empty Room: Ambient / Noise | Sound Effect!".into());
@@ -844,9 +849,9 @@ fn execute(
                     Some(asset.source.clone()),
                 )
             }
-            InputSpec::Url { url, .. } => {
+            InputSpec::Url { url, browser_session, .. } => {
                 let parsed = validation::validate_url(url)?;
-                let provider = providers::for_url(&parsed).ok_or_else(|| {
+                let provider = providers::for_url_with_session(&parsed, *browser_session).ok_or_else(|| {
                     ShiftError::new("no_provider", "SHIFT can't handle this link.")
                 })?;
                 let cache = temp.sub("meta")?;
@@ -892,12 +897,12 @@ fn execute(
     // ---- Stage 2: get the bytes -------------------------------------------
     let source_path: PathBuf = match (&request.input, local_input) {
         (InputSpec::Url { .. }, Some(path)) => path,
-        (InputSpec::Url { url, quality }, _) => {
+        (InputSpec::Url { url, quality, browser_session }, _) => {
             reporter.index = 1;
             reporter.advance(JobState::Downloading);
 
             let parsed = validation::validate_url(url)?;
-            let provider = providers::for_url(&parsed)
+            let provider = providers::for_url_with_session(&parsed, *browser_session)
                 .ok_or_else(|| ShiftError::new("no_provider", "SHIFT can't handle this link."))?;
             let kind = if request.format.is_audio_only() {
                 DownloadKind::Audio
@@ -1031,9 +1036,9 @@ fn execute_image(
 ) -> Result<()> {
     let resolved = match &request.input {
         InputSpec::Local { path } => validation::validate_input_path(path)?,
-        InputSpec::Url { url, .. } => {
+        InputSpec::Url { url, browser_session, .. } => {
             let parsed = validation::validate_url(url)?;
-            let provider = providers::for_url(&parsed)
+            let provider = providers::for_url_with_session(&parsed, *browser_session)
                 .ok_or_else(|| ShiftError::new("no_provider", "SHIFT can't handle this link."))?;
             let download = temp.sub("download")?;
             provider.download(
