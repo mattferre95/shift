@@ -68,6 +68,14 @@ single active item feeds preview and conversion; multiple selected items are
 downloaded to one folder with their native extensions. Every thumbnail uses a
 per-item cache directory, and resetting the shift removes the whole post cache.
 
+**Browser cookies are opt-in, per source.** A request runs with no browser
+session. When yt-dlp reports YouTube's bot check, the error is classified as
+`youtube_bot_check` and the UI offers **Retry with Chrome**; only that retry
+sets `BrowserSessionMode::Chrome`, which adds `--cookies-from-browser chrome`
+for analysis, preview and export of that source. SHIFT never reads cookie
+values itself, and cookie lines are redacted from yt-dlp's error output before
+it becomes an error's technical details. New Shift or a new source returns to no session.
+
 **Progress is never invented.** FFmpeg's `-progress` stream divided by a known
 duration is a real percentage. yt-dlp reports bytes via `--progress-template`;
 when the total is unknown the provider reports `None` and the UI falls back to
@@ -195,8 +203,19 @@ expression in floating point and rounds it its own way, which can land a pixel
 from where the preview draws. A test asserts the filter string equals the
 content box for every ratio, mode and source shape.
 
-The same shape is what a draggable crop would move later: dragging changes
-`offset`, and neither the filters nor the preview need to learn anything new.
+**A dragged crop lives in source pixels.** Moving or resizing the frame in
+Resize stores a `CropRect` in the unflipped source's own coordinates, with the
+size it was drawn against so a URL source fetched at another quality maps to
+the same region. Rust validates it and turns it into the same `crop` filter and
+content box; the frontend only maps pointer movement through `framing.ts`.
+
+**Flip is applied last.** `AspectSpec.flip` is independent of ratio and crop
+and valid with Original. `Reframe` appends `hflip` then `vflip` after every
+crop, scale and pad, so the crop never changes coordinate space and Fit's
+padding mirrors with the picture. The preview mirrors only media elements and
+maps the drawn frame and pointer through the same mirror, which keeps it
+what-you-see-is-what-you-get. An audio export ignores it, and it never changes
+a filename.
 
 **A preview never encodes.** `media::preview` makes one ~50 KB derivative per
 source — `sips` for a still, a single seeked frame for video — cached by path,

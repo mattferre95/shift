@@ -28,6 +28,11 @@ One source, one export, a few focused views of it in the sidebar:
 Edit and a crop set in Resize both land in the same file; each view only shows
 up when it applies to what you opened.
 
+The most common one-click changes — **Sound** and **Flip** — also sit as
+**Quick actions** on the first screen after a source loads; they are the same
+settings Edit and Resize show, not copies of them. **New Shift** (⌘N) clears
+the source and every setting and starts over.
+
 ## What it does
 
 ### URL and social media
@@ -41,6 +46,9 @@ up when it applies to what you opened.
 - Export **MP4**, **GIF**, **WEBP**, **MP3**, **M4A** or **WAV**
 - Optional **IN / OUT** clipping with millisecond precision
 - Quality selection where the source actually offers alternatives
+- When YouTube asks a public request for browser verification, an explicit
+  **Retry with Chrome** uses your local Chrome session for that link only.
+  Ordinary requests never read browser cookies, and SHIFT does not store them
 
 ### Local video and audio
 
@@ -80,10 +88,15 @@ Every export is named and placed through the native macOS Save panel, so the
 file lands exactly where you put it. Long jobs show real progress and can be
 cancelled.
 
-### Aspect
+### Aspect and flip
 
 - Reframe any visual export — video, loop or image — to **16:9 · 9:16 · 1:1 ·
   4:5 · 4:3**, or an exact size of your own
+- Position the crop directly on the preview: drag it to move, drag its handles
+  to resize. Preset ratios stay locked; **Freeform** resizes freely or with its
+  proportions locked
+- **Flip** horizontally, vertically or both, on its own or with any crop. The
+  preview in Resize and Edit shows exactly what the export will contain
 - **Fill** crops to the frame; **Fit** keeps the whole picture and pads the rest —
   transparently for PNG and WEBP, black for everything else
 - Nothing is ever stretched, and the preset ratios never enlarge — they are cut

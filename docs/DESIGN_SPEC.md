@@ -97,7 +97,8 @@ Heights: nav row 36 · chip 30 · button 42 · small button 32 · link field 50.
 ## Shell
 
 - **Sidebar** — 200px. An empty draggable strip for the traffic lights, the
-  `SHIFT™` wordmark, the five modes (Download, Convert, Edit, Resize,
+  `SHIFT™` wordmark, **New Shift ⌘N** (one reset of the source and every
+  setting), the five modes (Download, Convert, Edit, Resize,
   Compress) with ⌘1–⌘5 hints, and the build label pinned to the foot on one
   line (`SHIFT v<version> · <sha>`, with `-dirty` on uncommitted builds). There is no Settings item.
 - **Modes are views over one source.** There is one loaded source and one
@@ -149,8 +150,10 @@ are no invented steps and no Cancel (analysis cannot be stopped).
 A loaded single source shows a result card: thumbnail with duration, platform
 and author for links, title, real metadata, the link preview's real stage,
 format chips, quality chips when the provider has several renditions, a line
-of settings applied in other modes, shortcuts to the applicable modes, and the
-primary **Download…** / **Export…**. Links carry the authorization note.
+of settings applied in other modes, **Quick actions** — the shared Sound
+control and the two Flip toggles, each shown only where it applies — shortcuts
+to the applicable modes, and the primary **Download…** / **Export…**. Links
+carry the authorization note.
 
 ### Multi-item posts
 
@@ -187,8 +190,11 @@ outlined in accent; under Fill the cropped part stays visible, dimmed, outside
 the outline; under Fit the padding is black, or a checkerboard when the output
 keeps transparency. Below it, Source → Output dimensions in mono. The
 inspector holds the seven ratio tiles (each draws its own shape), Fill/Fit,
-Freeform width × height with a proportion lock, and the upscale warning. There
-is no crop positioning.
+Freeform width × height with a proportion lock, the two Flip toggles, and the
+upscale warning. Under Fill the crop frame is direct: drag it to move, drag its
+corner handles (and, in Freeform, its edges) to resize; preset ratios stay
+locked. Flip mirrors only the picture — the frame, handles and labels keep
+their orientation — and Edit's preview mirrors the same way.
 
 ### Compress
 
@@ -227,7 +233,10 @@ A label saying what failed (export, download, file or link), the plain
 message, the input, the hint, then actions: **Paste Another Link** / **Choose
 Another File…** / **Start Over**, and **Try Again** after an input failure or
 **Reopen File / Reopen Link** after an export failure (retry repeats the input,
-not the export). Technical details stay collapsed, in mono, wrapping and
+not the export). When YouTube asks for browser verification the error offers
+**Retry with Chrome** instead, with a note that the local Chrome session is
+used for this request and nothing is stored; a failed Chrome attempt offers
+only **Start Over**. Technical details stay collapsed, in mono, wrapping and
 scrolling within the panel.
 
 ## Motion
