@@ -1,4 +1,4 @@
-# SHIFT — Design Spec (v1.1)
+# SHIFT — Design Spec (v1.3)
 
 **SHIFT™ — Anything in. Anything out.**
 
@@ -27,6 +27,10 @@ native window background is `#06070B` so nothing flashes before first paint.
 Every screen works at the minimum size: nothing overflows horizontally, the
 primary action is always on screen, and inspector bodies scroll above a pinned
 action rather than pushing it off the bottom.
+
+Local image batches use a list that scrolls inside its panel. Batch name,
+shared output format and compression, and Export remain reachable at both
+980 × 680 and 780 × 560; the window does not grow with the image count.
 
 ## Tokens
 
@@ -101,12 +105,12 @@ Heights: nav row 36 · chip 30 · button 42 · small button 32 · link field 50.
   setting), the five modes (Download, Convert, Edit, Resize,
   Compress) with ⌘1–⌘5 hints, and the build label pinned to the foot on one
   line (`SHIFT v<version> · <sha>`, with `-dirty` on uncommitted builds). There is no Settings item.
-- **Modes are views over one source.** There is one loaded source and one
-  export. Availability is derived from the export's own state: Convert, Edit,
+- **Modes are views over one source or one local image batch.** Availability is
+  derived from the export's own state: Convert, Edit,
   Resize and Compress need a loaded single source; Edit needs something that
   plays; Resize needs an output with a shape; Compress needs an image. A post
-  with several items offers Download only. While a job runs, finishes or
-  fails, no mode is drawn as current.
+  with several items and a local image batch offer Download only. While a job
+  runs, finishes or fails, no mode is drawn as current.
 - **Header** — 48px, a window drag region. In Download it names the mode; in
   the other modes and the job screens it names the source with its real
   metadata (type · dimensions · duration · size · container · audio). Edit
@@ -247,7 +251,8 @@ indeterminate sweep, the spinner, and a slow sheen on loading placeholders.
 
 ## Deliberate differences from the design
 
-1. **No batch queue.** Convert is one source and one export.
+1. **Batch conversion is for local still images.** Video, audio and mixed-media
+   batches are not offered.
 2. **No video compression or size estimates.** Compress is image-only; sizes
    appear only after export.
 3. **No filmstrip** on the timeline, no compressed before/after slider, no

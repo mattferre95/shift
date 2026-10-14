@@ -1,7 +1,20 @@
 # SHIFT — QA Checklist
 
-Acceptance checks for V1, and the interface pass for v1.1. Automated coverage
-is named where it exists; the rest is a manual pass on a real build.
+Acceptance checks for V1, the v1.1 interface pass and v1.3 local image batches.
+Automated coverage is named where it exists; the rest is a manual pass on a real build.
+
+## v1.3 local image batches
+
+- `tests/image-batch.test.tsx` covers picker order, 2/10/50-item selection,
+  scrolling UI, single-image routing, skipped non-images, sequential jobs,
+  partial failure and cancellation.
+- Focused Rust tests cover numbered names, existing-file collisions and reuse
+  of the single-image conversion plan. `tests/image_pipeline.rs` covers the
+  image pipeline used by each item, including HEIC through macOS tooling.
+- The installed app was checked with 50 local images at 980 × 680 and
+  780 × 560: the list scrolls internally, the sidebar and batch controls remain
+  reachable, and the window does not grow with the list.
+- Manual batch workflow testing was approved for the v1.3.0 release.
 
 ## Automated
 

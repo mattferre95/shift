@@ -17,7 +17,7 @@ yt-dlp · ffprobe · ffmpeg             bundled sidecars
 
 The frontend can only describe *what it wants*: an input, an output format, an
 optional IN/OUT pair, a destination. It cannot pass a flag, an argument array,
-or a shell string. Ten commands make up the entire IPC surface
+or a shell string. A narrow command surface connects the two layers
 (`src-tauri/src/commands/mod.rs`).
 
 ## Modules
@@ -28,6 +28,7 @@ or a shell string. Ten commands make up the entire IPC surface
 | `process` | Binary resolution, spawning, cancellation. The only place a child process is created. |
 | `providers` | URL sources behind `UrlProvider`. yt-dlp is the first implementation, not the interface. |
 | `media::ffprobe` | The single source of truth about a file's streams. |
+| `media::image` | Probing and conversion plans for local still images, including HEIC/HEIF decoding. |
 | `media::aspect` | Shape: ratios, Fill/Fit, freeform sizes, and the filter chain each implies. The only place that arithmetic happens. |
 | `media::preview` | Small cached derivatives the interface draws framing previews with. Never an export input. |
 | `media::profiles` | Every codec and container decision, including the loop presets. Nothing else builds FFmpeg arguments. |
@@ -67,6 +68,17 @@ as a narrow fallback while yt-dlp continues to own network acquisition. A
 single active item feeds preview and conversion; multiple selected items are
 downloaded to one folder with their native extensions. Every thumbnail uses a
 per-item cache directory, and resetting the shift removes the whole post cache.
+
+**A local image batch is an ordered list of single-image jobs.** The native
+multi-file picker and drag/drop feed paths to `state/shift.tsx`, which analyzes
+them in input order and keeps compatible still images. `state/imageBatch.ts`
+holds selection and the intersection of available output formats. One chosen
+folder, format and compression setting apply to every selected item. The UI
+starts one job at a time; each job takes the existing `media::image` pipeline,
+including macOS HEIC/HEIF decoding. Rust receives a batch name and ordinal,
+sanitizes the stem and resolves collisions without changing later ordinals.
+Per-item results remain visible, later items continue after an ordinary item
+failure, and cancellation keeps completed outputs.
 
 **Browser cookies are opt-in, per source.** A request runs with no browser
 session. When yt-dlp reports YouTube's bot check, the error is classified as
@@ -261,16 +273,17 @@ square.
 children. Each job owns one `CancelToken`; the child is spawned into its own
 process group and cancel sends `SIGTERM` to the whole group.
 
-## Interface (v1.1)
+## Interface (v1.3)
 
 **Modes are views, not pipelines.** The sidebar's Download, Convert, Edit,
-Resize and Compress are presentations of the one source and the one export in
+Resize and Compress are presentations of a loaded single source in
 `state/shift.tsx`. The chosen view lives in `state/view.tsx` and never enters
 `ExportRequest`; opening a mode changes nothing that will be produced. Which
 modes are available is derived from the same flags the export reads (`isImage`,
 `showAspect`, `outputs`, compression choices), so the sidebar cannot offer a
 control the export would ignore. A post with several items is downloaded as
-its original files, so it offers Download only.
+its original files, so it offers Download only. Local image batches also stay
+in Download and show their own selection and export controls.
 
 **Words about the export are read, not computed twice.** The applied-settings
 summary, the reason Export is blocked and the loop limits come from
@@ -331,7 +344,7 @@ Still open before public distribution:
 
 ## Future work
 
-Post-V1, in the PRD's order: local history, batch jobs, reusable presets, a
+Post-V1, in the PRD's order: local history, reusable presets, a
 multi-action chain editor.
 Deliberately not built yet: APNG (rarely needed next to animated WebP), ProRes
 and MKV output (real but narrow audiences), Opus as a separate chip (M4A/AAC

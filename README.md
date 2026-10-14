@@ -23,7 +23,7 @@ Drop a file or paste a link. SHIFT works out what it is and shows only the
 outputs that make sense for it — a photo never offers you a bitrate, an audio
 file never offers you a resolution.
 
-One source, one export, a few focused views of it in the sidebar:
+For a single source, one export and a few focused views of it in the sidebar:
 **Download**, **Convert**, **Edit**, **Resize** and **Compress**. A trim set in
 Edit and a crop set in Resize both land in the same file; each view only shows
 up when it applies to what you opened.
@@ -79,14 +79,21 @@ the source and every setting and starts over.
 
 - Read **HEIC · HEIF · JPG · JPEG · PNG · WEBP · AVIF**, plus single-frame **GIF**
 - Export **JPG · PNG · WEBP · AVIF**
+- Choose or drop multiple local images for a batch with no fixed image count. Pick one output
+  format and compression setting, then one destination folder for the batch
+- Convert iPhone HEIC/HEIF photos through the same local image pipeline as a
+  single image. Outputs use the batch name and contiguous numbers, such as
+  `photos_1.jpg`, `photos_2.jpg`; existing files get collision-safe names
+- See per-image progress and a completion list. An image that fails does not
+  prevent later images from exporting
 - Quality presets for the lossy formats — None, Light, Balanced, Strong
 - Lossless optimization for PNG, which never touches a pixel
 - AVIF for the smallest photographs by a wide margin; it is not offered for
   images with transparency, which it cannot carry
 
-Every export is named and placed through the native macOS Save panel, so the
-file lands exactly where you put it. Long jobs show real progress and can be
-cancelled.
+Single-source exports use the native macOS Save panel. Image batches use a
+native folder picker and save their numbered files there. Long jobs show
+progress and can be cancelled.
 
 ### Aspect and flip
 
