@@ -410,6 +410,14 @@ pub fn reveal_in_finder(app: AppHandle, path: String) -> Result<()> {
     Ok(())
 }
 
+#[tauri::command]
+pub fn open_output_folder(path: String) -> Result<()> {
+    let folder = validation::validate_output_dir(&path)?;
+    tauri_plugin_opener::open_path(&folder, None::<&str>).map_err(|e| {
+        ShiftError::new("reveal_failed", "SHIFT couldn't open Finder.").technical(e.to_string())
+    })
+}
+
 /// Startup housekeeping, exposed so the UI can trigger it once on mount.
 #[tauri::command]
 pub fn prune_temp() {

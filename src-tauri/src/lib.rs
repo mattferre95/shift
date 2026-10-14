@@ -48,6 +48,7 @@ pub fn run() {
             commands::default_output_dir,
             commands::set_output_dir,
             commands::reveal_in_finder,
+            commands::open_output_folder,
             commands::prune_temp,
             commands::health,
         ])

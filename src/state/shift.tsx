@@ -19,6 +19,7 @@ import {
 } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import * as ipc from "@/lib/ipc";
+import { appendImages, commonFormats, removeImage, selectedImages, setAllSelected, toggleSelected } from "./imageBatch";
 import { centeredCrop, cropForSource } from "@/features/resize/framing";
 import { formatTimestamp, parseTimestamp } from "@/lib/format";
 import {
@@ -55,6 +56,7 @@ import {
   type Health,
   type JobEvent,
   type JobOutput,
+  type ImageBatch,
   type LocalMedia,
   type OutputFormat,
   type PostMedia,
@@ -62,7 +64,7 @@ import {
   type UrlMedia,
 } from "@/types";
 
-export type Screen = "empty" | "url" | "local" | "processing" | "complete" | "error";
+export type Screen = "empty" | "url" | "local" | "batch" | "processing" | "complete" | "error";
 
 /**
  * Output chips for a remote source (URL-03).
@@ -91,6 +93,8 @@ interface ShiftState {
   activeMediaIndex: number;
   selectedMediaIds: string[];
   localMedia: LocalMedia | null;
+  batch: ImageBatch | null;
+  inputWarning: string | null;
   format: OutputFormat;
   quality: string;
   soundEnabled: boolean;
@@ -126,6 +130,7 @@ interface ShiftApi extends ShiftState {
   playback: ReturnType<typeof usePlayback>;
   activeMedia: PostMedia | null;
   selectedMediaCount: number;
+  selectedBatchCount: number;
   outputs: OutputFormat[];
   showQuality: boolean;
   duration: number | null;
@@ -169,6 +174,11 @@ interface ShiftApi extends ShiftState {
   submitUrl: (raw: string) => void;
   openFilePicker: () => void;
   acceptPaths: (paths: string[]) => void;
+  setBatchName: (name: string) => void;
+  toggleBatchItem: (id: string) => void;
+  selectAllBatch: () => void;
+  deselectAllBatch: () => void;
+  removeBatchItem: (id: string) => void;
   setDragging: (v: boolean) => void;
   setFormat: (f: OutputFormat) => void;
   setQuality: (q: string) => void;
@@ -205,6 +215,8 @@ const initial: ShiftState = {
   activeMediaIndex: 0,
   selectedMediaIds: [],
   localMedia: null,
+  batch: null,
+  inputWarning: null,
   format: "MP4",
   quality: "best",
   soundEnabled: true,
@@ -266,6 +278,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
   const awaitingJobId = useRef(false);
   const retiredJobs = useRef(new Set<string>());
   const sourceGeneration = useRef(0);
+  const batchRun = useRef<{ cancelled: boolean; itemId: string | null; resolve: ((event: JobEvent) => void) | null } | null>(null);
 
   useEffect(() => {
     ipc.defaultOutputDir().then((dir) => patch({ outputDir: dir })).catch(() => {});
@@ -287,6 +300,30 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
         awaitingJobId.current = false;
       }
       if (event.jobId !== jobRef.current) return;
+
+      const runningBatch = batchRun.current;
+      if (runningBatch) {
+        const itemId = runningBatch.itemId;
+        if (itemId) {
+          set((prev) => prev.batch ? ({ ...prev, batch: {
+            ...prev.batch,
+            items: prev.batch.items.map((item) => item.id === itemId ? {
+              ...item,
+              status: event.state === "completed" ? "success" : event.state === "failed" ? "failed" : event.state === "cancelled" ? "cancelled" : "processing",
+              output: event.output ?? item.output,
+              error: event.error ?? item.error,
+            } : item),
+          } }) : prev);
+        }
+        if (event.state === "completed" || event.state === "failed" || event.state === "cancelled") {
+          jobRef.current = null;
+          runningBatch.resolve?.(event);
+          runningBatch.resolve = null;
+        } else {
+          patch({ job: { id: event.jobId, state: event.state, stageLabel: event.stageLabel, stageIndex: event.stageIndex, stageCount: event.stageCount, progress: event.progress, filename: event.outputFilename } });
+        }
+        return;
+      }
 
       if (event.state === "completed" && event.output) {
         jobRef.current = null;
@@ -359,6 +396,8 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
               activeMediaIndex: activeIndex,
               selectedMediaIds: sameSource ? selected : media.mediaItems.map((item) => item.id),
               localMedia: null,
+              batch: null,
+              inputWarning: null,
               format: sameSource && prev.urlMedia?.mediaItems[prev.activeMediaIndex]?.type === active.type
                 ? prev.format : defaultOut,
               quality: sameSource && active.qualities.some((quality) => quality.id === prev.quality)
@@ -391,7 +430,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
     (path: string) => {
       const generation = ++sourceGeneration.current;
       lastInput.current = { kind: "file", value: path };
-      patch({ analyzing: true, error: null, dragging: false });
+      patch({ analyzing: true, error: null, inputWarning: null, dragging: false });
       ipc
         .analyzeFile(path)
         .then((media) => {
@@ -404,6 +443,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
             screen: "local",
             analyzing: false,
             localMedia: media,
+            batch: null,
             urlMedia: null,
             browserSession: "none",
             activeMediaIndex: 0,
@@ -435,16 +475,53 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
 
   const acceptPaths = useCallback(
     (paths: string[]) => {
-      // V1 is deliberately single-input; batch is post-V1.
-      if (paths.length > 0) acceptFile(paths[0]);
+      if (!paths.length || s.analyzing) return;
+      if (paths.length === 1 && !s.batch) { acceptFile(paths[0]); return; }
+      const generation = ++sourceGeneration.current;
+      lastInput.current = null;
+      patch({ analyzing: true, error: null, inputWarning: null, dragging: false });
+      void (async () => {
+        const media: LocalMedia[] = [];
+        const skipped: ImageBatch["skipped"] = [];
+        // Analyze in input order. One native decoder at a time keeps large drops responsive.
+        for (const path of paths) {
+          try {
+            const result = await ipc.analyzeFile(path);
+            if (result.kind === "image") media.push(result);
+            else skipped.push({ path, reason: `${result.kind} is not a still image` });
+          } catch (error) { skipped.push({ path, reason: ipc.toShiftError(error).message }); }
+          if (generation !== sourceGeneration.current) return;
+        }
+        if (generation !== sourceGeneration.current) return;
+        const current = s.batch;
+        if (!current && media.length === 1) {
+          acceptFile(media[0].path);
+          if (skipped.length) patch({ inputWarning: `Skipped ${skipped.length} incompatible item${skipped.length === 1 ? "" : "s"}: ${skipped.map((entry) => `${entry.path.split("/").pop()} (${entry.reason})`).join("; ")}` });
+          return;
+        }
+        if (!current && media.length < 2) {
+          patch({ analyzing: false, screen: "error", error: { code: "batch_input", message: "Choose at least two compatible images for a batch.", hint: skipped.map((entry) => `${entry.path}: ${entry.reason}`).join("\n"), technical: null } });
+          return;
+        }
+        set((prev) => {
+          const batch = appendImages(prev.batch, media, skipped);
+          const formats = commonFormats(batch);
+          const format = prev.batch && formats.includes(prev.format) ? prev.format : formats[0] ?? "JPG";
+          return { ...prev, analyzing: false, screen: "batch", batch, localMedia: null, urlMedia: null,
+          format, compression: current && compressionOptions(format).some((option) => option.id === prev.compression) ? prev.compression : "none",
+          aspect: ASPECT_DEFAULT, flip: FLIP_NONE,
+          clipEnabled: false, clipError: null, clipSeconds: null,
+          previewSource: null, previewError: null, inputWarning: null, output: null, error: null };
+        });
+      })();
     },
-    [acceptFile],
+    [acceptFile, patch, s.batch, s.analyzing],
   );
 
   const openFilePicker = useCallback(async () => {
     const { open } = await import("@tauri-apps/plugin-dialog");
     const picked = await open({
-      multiple: false,
+      multiple: true,
       directory: false,
       filters: [
         {
@@ -458,11 +535,13 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
         },
       ],
     });
-    if (typeof picked === "string") acceptFile(picked);
-  }, [acceptFile]);
+    if (typeof picked === "string") acceptPaths([picked]);
+    else if (Array.isArray(picked)) acceptPaths(picked);
+  }, [acceptPaths]);
 
   // ---- derived ------------------------------------------------------------
   const outputs = useMemo<OutputFormat[]>(() => {
+    if (s.batch) return commonFormats(s.batch);
     if (s.screen === "url") {
       const kind = s.urlMedia?.mediaItems[s.activeMediaIndex]?.type;
       if (kind === "image") return ["JPG", "PNG", "WEBP", "AVIF"];
@@ -470,7 +549,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
       return URL_OUTPUTS;
     }
     return s.localMedia?.outputs ?? [];
-  }, [s.screen, s.localMedia, s.urlMedia, s.activeMediaIndex]);
+  }, [s.screen, s.localMedia, s.urlMedia, s.activeMediaIndex, s.batch]);
 
   const activeMedia = s.urlMedia?.mediaItems[s.activeMediaIndex] ?? null;
   // A post with several items downloads its original files and is shown from
@@ -657,11 +736,12 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
 
   const canExport =
     !s.analyzing &&
-    (s.screen === "url" || s.screen === "local") &&
+    (s.screen === "url" || s.screen === "local" || s.screen === "batch") &&
     (!s.clipEnabled || (!s.clipError && validatedClip === clipKey)) &&
     !loopTooLong &&
     !aspectInvalid &&
-    (!s.urlMedia || s.urlMedia.mediaItems.length === 1 || s.selectedMediaIds.length > 0);
+    (!s.urlMedia || s.urlMedia.mediaItems.length === 1 || s.selectedMediaIds.length > 0) &&
+    (!s.batch || (selectedImages(s.batch).length > 0 && outputs.includes(s.format)));
 
   // ---- actions ------------------------------------------------------------
   /**
@@ -671,6 +751,62 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
   const startExport = useCallback(async () => {
     if (!canExport || saving) return;
     const generation = sourceGeneration.current;
+    if (s.batch) {
+      setSaving(true);
+      try {
+        const { open } = await import("@tauri-apps/plugin-dialog");
+        const chosen = await open({ multiple: false, directory: true, defaultPath: s.outputDir || undefined });
+        if (typeof chosen !== "string" || !chosen) return;
+        const items = selectedImages(s.batch);
+        const run = { cancelled: false, itemId: null as string | null, resolve: null as ((event: JobEvent) => void) | null };
+        batchRun.current = run;
+        const saved = await ipc.setOutputDir(chosen).catch(() => chosen);
+        if (generation !== sourceGeneration.current) return;
+        patch({ screen: "processing", outputDir: saved, batch: { ...s.batch, destination: chosen,
+          items: s.batch.items.map((item) => ({ ...item, status: "pending" as const, output: null, error: null })) },
+          job: { id: "", state: "queued", stageLabel: `Converting 1 of ${items.length}`, stageIndex: 0, stageCount: 1, progress: null, filename: "" } });
+        setSaving(false);
+        for (const [index, item] of items.entries()) {
+          if (run.cancelled || generation !== sourceGeneration.current) break;
+          run.itemId = item.id;
+          patch({ job: { id: "", state: "queued", stageLabel: `Converting ${index + 1} of ${items.length}`, stageIndex: 0, stageCount: 1, progress: null, filename: item.media.name } });
+          const request: ExportRequest = {
+            input: { kind: "local", path: item.media.path }, format: s.format,
+            clip: null, sourceTitle: null, sourceHint: null, sourceDuration: null,
+            outputDir: chosen, compression: s.compression, loopSize: null,
+            aspect: null, soundEnabled: true, destinationPath: null,
+            batchNaming: { base: s.batch.name, ordinal: index + 1 },
+          };
+          try {
+            const finished = new Promise<JobEvent>((resolve) => { run.resolve = resolve; });
+            awaitingJobId.current = true;
+            const id = await ipc.startExport(request);
+            awaitingJobId.current = false;
+            if (generation !== sourceGeneration.current) { void ipc.cancelJob(id).catch(() => {}); break; }
+            if (run.resolve) jobRef.current = id;
+            else jobRef.current = null;
+            if (run.cancelled) void ipc.cancelJob(id).catch(() => {});
+            const event = await finished;
+            if (event.state === "cancelled") run.cancelled = true;
+            if (event.error && ["missing_dir", "not_a_dir", "missing_binary", "io_error"].includes(event.error.code)) run.cancelled = true;
+          } catch (error) {
+            awaitingJobId.current = false;
+            run.resolve = null;
+            const failure = ipc.toShiftError(error);
+            set((prev) => prev.batch ? ({ ...prev, batch: { ...prev.batch,
+              items: prev.batch.items.map((entry) => entry.id === item.id ? { ...entry, status: "failed", error: failure } : entry) } }) : prev);
+          }
+        }
+        if (generation !== sourceGeneration.current) return;
+        set((prev) => ({ ...prev, screen: "complete", job: null, batch: prev.batch ? { ...prev.batch,
+          items: prev.batch.items.map((item) => item.status === "pending" ? { ...item, status: "cancelled" } : item) } : null }));
+        batchRun.current = null;
+      } catch (error) {
+        if (generation === sourceGeneration.current) patch({ screen: "batch", error: ipc.toShiftError(error), job: null });
+        batchRun.current = null;
+      } finally { setSaving(false); }
+      return;
+    }
     const selectedItems = s.urlMedia?.mediaItems.filter((item) =>
       s.selectedMediaIds.includes(item.id),
     ) ?? [];
@@ -794,21 +930,24 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
     } finally {
       setSaving(false);
     }
-  }, [canExport, saving, s.urlMedia, s.selectedMediaIds, activeMedia, s.localMedia, s.quality, s.browserSession, s.format, s.soundEnabled, s.clipEnabled, s.clipIn, s.clipOut, s.outputDir, s.compression, s.loopSize, s.aspect, s.flip, duration, isImage, isLoop, showAspect, patch]);
+  }, [canExport, saving, s.batch, s.urlMedia, s.selectedMediaIds, activeMedia, s.localMedia, s.quality, s.browserSession, s.format, s.soundEnabled, s.clipEnabled, s.clipIn, s.clipOut, s.outputDir, s.compression, s.loopSize, s.aspect, s.flip, duration, isImage, isLoop, showAspect, patch]);
 
   const cancel = useCallback(() => {
-    const id = s.job?.id ?? jobRef.current;
+    if (batchRun.current) batchRun.current.cancelled = true;
+    const id = jobRef.current ?? s.job?.id;
     if (id) ipc.cancelJob(id).catch(() => {});
   }, [s.job]);
 
   const reset = useCallback(() => {
     if (saving) return;
-    if (s.screen === "empty" && !s.analyzing && !lastInput.current) {
+    if (s.screen === "empty" && !s.analyzing && !lastInput.current && !s.batch) {
       document.querySelector<HTMLInputElement>('input[type="url"]')?.focus();
       return;
     }
     ++sourceGeneration.current;
     cancel();
+    batchRun.current?.resolve?.({ jobId: jobRef.current ?? "", state: "cancelled", stageLabel: "", stageIndex: 0, stageCount: 1, progress: null, outputFilename: "", output: null, error: null, actions: [] });
+    batchRun.current = null;
     if (jobRef.current) retiredJobs.current.add(jobRef.current);
     awaitingJobId.current = false;
     void ipc.releaseUrlMedia(
@@ -823,7 +962,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
       health: prev.health,
       healthError: prev.healthError,
     }));
-  }, [cancel, saving, s.screen, s.analyzing, s.urlMedia]);
+  }, [cancel, saving, s.screen, s.analyzing, s.urlMedia, s.batch]);
 
   const retry = useCallback(() => {
     const last = lastInput.current;
@@ -848,6 +987,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
     outputs,
     activeMedia,
     selectedMediaCount: s.selectedMediaIds.length,
+    selectedBatchCount: s.batch ? selectedImages(s.batch).length : 0,
     showQuality,
     duration,
     canExport,
@@ -873,6 +1013,29 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
     submitUrl,
     openFilePicker,
     acceptPaths,
+    setBatchName: (name) => set((prev) => prev.batch ? ({ ...prev, batch: { ...prev.batch, name } }) : prev),
+    toggleBatchItem: (id) => set((prev) => {
+      if (!prev.batch) return prev;
+      const batch = toggleSelected(prev.batch, id);
+      const formats = commonFormats(batch);
+      const format = formats.includes(prev.format) ? prev.format : formats[0] ?? prev.format;
+      return { ...prev, batch, format, compression: compressionOptions(format).some((option) => option.id === prev.compression) ? prev.compression : "none" };
+    }),
+    selectAllBatch: () => set((prev) => {
+      if (!prev.batch) return prev;
+      const batch = setAllSelected(prev.batch, true);
+      const formats = commonFormats(batch);
+      const format = formats.includes(prev.format) ? prev.format : formats[0] ?? prev.format;
+      return { ...prev, batch, format, compression: compressionOptions(format).some((option) => option.id === prev.compression) ? prev.compression : "none" };
+    }),
+    deselectAllBatch: () => set((prev) => prev.batch ? ({ ...prev, batch: setAllSelected(prev.batch, false) }) : prev),
+    removeBatchItem: (id) => set((prev) => {
+      if (!prev.batch) return prev;
+      const batch = removeImage(prev.batch, id);
+      const formats = commonFormats(batch);
+      const format = formats.includes(prev.format) ? prev.format : formats[0] ?? prev.format;
+      return { ...prev, batch, format, compression: compressionOptions(format).some((option) => option.id === prev.compression) ? prev.compression : "none" };
+    }),
     setDragging: (v) => patch({ dragging: v }),
     setFormat: (f) =>
       set((prev) => {

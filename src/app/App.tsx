@@ -9,6 +9,7 @@ import { Home } from "@/features/input/Home";
 import { ResizeView } from "@/features/resize/ResizeView";
 import { PostHeader } from "@/features/social/PostView";
 import { SourceResult } from "@/features/input/SourceResult";
+import { ImageBatchView } from "@/features/input/ImageBatchView";
 import { CompleteState } from "@/features/export/CompleteState";
 import { ErrorState } from "@/features/export/ErrorState";
 import { ProcessingState } from "@/features/jobs/ProcessingState";
@@ -66,6 +67,7 @@ function Window() {
           <div className={fullWidth ? "relative h-full w-full" : "relative mx-auto h-full w-full max-w-[920px]"}>
             {screen === "empty" && <Home />}
             {loaded && <ModeView view={view} />}
+            {screen === "batch" && <ImageBatchView />}
             {screen === "processing" && <ProcessingState />}
             {screen === "complete" && <CompleteState />}
             {screen === "error" && <ErrorState during={failedDuring.current} />}

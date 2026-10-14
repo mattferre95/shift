@@ -40,6 +40,7 @@ export function SourceResult() {
   return (
     <HomeFrame width={680}>
       <div className="flex flex-col gap-4">
+        {s.inputWarning && <div role="alert" className="text-[12px] text-shift-danger">{s.inputWarning}</div>}
         {isUrl && <SourceLink />}
 
         <div className="shift-panel relative grid grid-cols-[minmax(150px,240px)_minmax(0,1fr)] gap-5 p-4">

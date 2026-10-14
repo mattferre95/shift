@@ -85,6 +85,7 @@ export const defaultOutputDir = () => invoke<string>("default_output_dir");
 export const setOutputDir = (dir: string) => invoke<string>("set_output_dir", { dir });
 
 export const revealInFinder = (path: string) => invoke<void>("reveal_in_finder", { path });
+export const openOutputFolder = (path: string) => invoke<void>("open_output_folder", { path });
 
 export const health = () => invoke<Health>("health");
 

@@ -241,6 +241,22 @@ export interface LocalMedia {
   hasAlpha: boolean;
 }
 
+export interface BatchItem {
+  id: string;
+  media: LocalMedia;
+  selected: boolean;
+  status: "pending" | "processing" | "success" | "failed" | "cancelled";
+  output: JobOutput | null;
+  error: ShiftError | null;
+}
+
+export interface ImageBatch {
+  items: BatchItem[];
+  name: string;
+  destination: string | null;
+  skipped: { path: string; reason: string }[];
+}
+
 export type JobState =
   | "queued"
   | "analyzing"
@@ -311,6 +327,8 @@ export interface ExportRequest {
   soundEnabled: boolean;
   /** Full path chosen in the native Save panel. */
   destinationPath: string | null;
+  /** Rust applies the same sanitizer and filename builder as single exports. */
+  batchNaming?: { base: string; ordinal: number } | null;
 }
 
 export interface SavePrompt {

@@ -12,6 +12,8 @@ export function ProcessingState() {
   const s = useShift();
   const { job, cancel } = s;
   const multi = (s.urlMedia?.mediaItems.length ?? 0) > 1;
+  const batchItems = s.batch?.items.filter((item) => item.selected) ?? [];
+  const completedBatchItems = batchItems.filter((item) => ["success", "failed", "cancelled"].includes(item.status)).length;
 
   // Before the first event the pipeline is not planned yet, so there is no
   // stage to count and nothing to measure.
@@ -21,7 +23,7 @@ export function ProcessingState() {
   const fraction = queued ? null : job?.progress ?? null;
   const percent = fraction == null ? null : Math.round(Math.max(0, Math.min(1, fraction)) * 100);
 
-  const name = sourceName(s);
+  const name = s.batch ? `${completedBatchItems + 1} of ${batchItems.length} images` : sourceName(s);
   const thumb = !multi ? s.previewImage : null;
 
   return (
@@ -42,7 +44,7 @@ export function ProcessingState() {
         <div className="flex flex-col gap-3">
           <div className="flex items-baseline justify-between gap-3">
             <h2 role="status" aria-live="polite" className="m-0 text-[19px] font-semibold text-shift-text">
-              {job?.stageLabel || "Preparing…"}
+              {s.batch ? `Converting ${Math.min(completedBatchItems + 1, batchItems.length)} of ${batchItems.length}` : job?.stageLabel || "Preparing…"}
             </h2>
             {percent != null && <span className="font-mono text-[13px] text-shift-dim">{percent}%</span>}
           </div>
@@ -70,6 +72,8 @@ export function ProcessingState() {
             )}
           </div>
         </div>
+
+        {s.batch && <div className="text-[12px] text-shift-soft">{completedBatchItems} / {batchItems.length} complete · {batchItems.find((item) => item.status === "processing")?.media.name ?? "Preparing…"}</div>}
 
         {!multi && s.outputDir && (
           <div className="truncate border-t border-[var(--hairline)] pt-3 font-mono text-[11.5px] text-shift-soft" title={s.outputDir}>

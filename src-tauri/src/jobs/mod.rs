@@ -130,6 +130,15 @@ pub struct ExportRequest {
     /// exactly there instead of inventing a collision-safe name.
     #[serde(default)]
     pub destination_path: Option<String>,
+    #[serde(default)]
+    pub batch_naming: Option<BatchNamingContext>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchNamingContext {
+    pub base: String,
+    pub ordinal: usize,
 }
 
 fn default_true() -> bool {
@@ -363,6 +372,9 @@ fn output_stem(
     clip: Option<ClipRange>,
     duration: Option<f64>,
 ) -> String {
+    if let Some(batch) = &request.batch_naming {
+        return format!("{}_{}", filesystem::sanitize_title_stem(&batch.base), batch.ordinal);
+    }
     let mut stem = match request.input {
         InputSpec::Url { .. } => filesystem::sanitize_title_stem(source_title),
         InputSpec::Local { .. } => filesystem::sanitize_stem(source_title),
@@ -510,6 +522,7 @@ mod tests {
             aspect: None,
             sound_enabled: true,
             destination_path: None,
+            batch_naming: None,
         }
     }
 
@@ -518,6 +531,83 @@ mod tests {
         // The UI passes the display name, which still has ".HEIC" on it.
         let r = request("/photos/IMG_7397.HEIC", OutputFormat::Jpg);
         assert_eq!(suggested_filename(&r), "IMG_7397.jpg");
+    }
+
+    #[test]
+    fn batch_names_are_contiguous_and_use_the_existing_sanitizer() {
+        let mut request = request("/photos/IMG_4821.HEIC", OutputFormat::Jpg);
+        assert_eq!(suggested_filename(&request), "IMG_4821.jpg");
+        for count in [2, 10, 50] {
+            for ordinal in 1..=count {
+                request.batch_naming = Some(BatchNamingContext { base: "Paris iPhone".into(), ordinal });
+                assert_eq!(suggested_filename(&request), format!("Paris_iPhone_{ordinal}.jpg"));
+            }
+        }
+        request.batch_naming = Some(BatchNamingContext { base: "photos".into(), ordinal: 2 });
+        assert_eq!(suggested_filename(&request), "photos_2.jpg");
+    }
+
+    #[test]
+    fn a_batch_collision_does_not_shift_later_ordinals() {
+        let dir = std::env::temp_dir().join(format!("shift-batch-collision-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("photos_1.jpg"), b"existing").unwrap();
+        let mut request = request("/photos/a.heic", OutputFormat::Jpg);
+        request.batch_naming = Some(BatchNamingContext { base: "photos".into(), ordinal: 1 });
+        let first = resolve_destination(&request, &dir, &output_stem(&request, "a", None, None)).unwrap();
+        assert!(first.ends_with("photos_1-2.jpg"));
+        request.batch_naming.as_mut().unwrap().ordinal = 2;
+        let second = resolve_destination(&request, &dir, &output_stem(&request, "a", None, None)).unwrap();
+        assert!(second.ends_with("photos_2.jpg"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn multiple_real_images_use_the_single_image_plan() {
+        let dir = std::env::temp_dir().join(format!("shift-batch-pipeline-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // A tiny 2×2 BMP is generated here, then macOS produces two real PNG sources.
+        let mut bmp = vec![b'B', b'M'];
+        bmp.extend_from_slice(&70u32.to_le_bytes());
+        bmp.extend_from_slice(&[0; 4]);
+        bmp.extend_from_slice(&54u32.to_le_bytes());
+        bmp.extend_from_slice(&40u32.to_le_bytes());
+        bmp.extend_from_slice(&2i32.to_le_bytes());
+        bmp.extend_from_slice(&2i32.to_le_bytes());
+        bmp.extend_from_slice(&1u16.to_le_bytes());
+        bmp.extend_from_slice(&24u16.to_le_bytes());
+        bmp.extend_from_slice(&0u32.to_le_bytes());
+        bmp.extend_from_slice(&16u32.to_le_bytes());
+        bmp.extend_from_slice(&[0; 16]);
+        for _ in 0..2 { bmp.extend_from_slice(&[0, 0, 255, 0, 0, 255, 0, 0]); }
+        let source_bmp = dir.join("source.bmp");
+        std::fs::write(&source_bmp, bmp).unwrap();
+        let cancel = CancelToken::new();
+        let mut outputs = Vec::new();
+        for ordinal in 1..=2 {
+            let input = dir.join(format!("input_{ordinal}.png"));
+            let converted = crate::process::run_capture(Binary::Sips, &[
+                "-s".into(), "format".into(), "png".into(), source_bmp.to_string_lossy().into_owned(),
+                "--out".into(), input.to_string_lossy().into_owned(),
+            ], &cancel).unwrap();
+            assert!(converted.success);
+            let probe = image::probe(&input, &cancel).unwrap();
+            let output = dir.join(format!("photos_{ordinal}.jpg"));
+            let plan = image::build_plan(&input, &probe.format, OutputFormat::Jpg, Compression::None,
+                probe.has_alpha, (probe.width, probe.height), &AspectSpec::default(), &dir, &output).unwrap();
+            for step in &plan.steps {
+                let (binary, args) = match step {
+                    image::ImageStep::Sips(args) => (Binary::Sips, args),
+                    image::ImageStep::Ffmpeg(args) => (Binary::Ffmpeg, args),
+                };
+                assert!(crate::process::run_capture(binary, args, &cancel).unwrap().success);
+            }
+            let result = image::probe(&output, &cancel).unwrap();
+            assert_eq!((result.width, result.height), (2, 2));
+            outputs.push(output);
+        }
+        assert_eq!(std::fs::read(&outputs[0]).unwrap(), std::fs::read(&outputs[1]).unwrap());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -667,6 +757,7 @@ mod tests {
             aspect: None,
             sound_enabled: true,
             destination_path: None,
+            batch_naming: None,
         };
         assert_eq!(suggested_filename(&r), "The_Sopranos_4s.mp3");
     }
