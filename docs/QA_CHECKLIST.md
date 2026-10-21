@@ -3,6 +3,15 @@
 Acceptance checks for V1, the v1.1 interface pass and v1.3 local image batches.
 Automated coverage is named where it exists; the rest is a manual pass on a real build.
 
+## v1.3.1 web video and Chrome session
+
+- Local egress fixtures cover public media, redirects, private destinations,
+  HLS/DASH resources, embedded URLs, and external downloader attempts.
+- Browser-session tests cover the Chrome permission explanation, pending state,
+  denied-session recovery, and New Shift reset.
+- The integrated review app passed manual LinkedIn, YouTube, Chrome permission,
+  local export, and New Shift checks before this release.
+
 ## v1.3 local image batches
 
 - `tests/image-batch.test.tsx` covers picker order, 2/10/50-item selection,
@@ -27,7 +36,7 @@ cargo test --test url_pipeline -- --ignored --nocapture      # needs network
 npx tsc --noEmit && npm test                                 # frontend
 ```
 
-- `cargo test --lib` — 74 tests, including the whole `media::aspect` geometry:
+- `cargo test --lib` includes the `media::aspect` geometry:
   ratio accuracy across five sources, no-stretch across every combination,
   never-enlarge for presets, even dimensions, filter ordering, tiny sources, and
   freeform validation. Plus: timestamp parsing and rejection, clip bounds,
@@ -47,7 +56,7 @@ npx tsc --noEmit && npm test                                 # frontend
   optimization, AVIF from every supported source, AVIF undercutting WEBP,
   **a 12 MP AVIF encoding inside 12s** (the `-cpu-used 6` regression guard), and
   transparency either preserved by WEBP or refused by AVIF.
-- `tests/url_pipeline.rs` — 5 tests against live public sources: generic-extractor
+- `tests/url_pipeline.rs` — 6 opt-in tests against live public sources: generic-extractor
   analysis, real-extractor analysis with backend thumbnail fetch, download +
   accurate clip to MP3, normalized failure on an unreadable link, cancelled
   download.

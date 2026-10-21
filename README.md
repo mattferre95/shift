@@ -37,8 +37,10 @@ the source and every setting and starts over.
 
 ### URL and social media
 
-- Paste any link yt-dlp supports
-- Download public video and image media from **X · Instagram · TikTok**
+- Paste public HTTP(S) links supported by yt-dlp, including direct media URLs
+  and video pages on compatible sites; individual sites can change
+- Download public video and image media from **X · Instagram · TikTok**, and
+  public LinkedIn videos, including supported `lnkd.in` short links
 - Keep multi-image and mixed-media posts in their original order
 - Pick which items of a carousel or mixed-media post to download; they are
   saved as posted, together, into a folder you choose
@@ -47,8 +49,9 @@ the source and every setting and starts over.
 - Optional **IN / OUT** clipping with millisecond precision
 - Quality selection where the source actually offers alternatives
 - When YouTube asks a public request for browser verification, an explicit
-  **Retry with Chrome** uses your local Chrome session for that link only.
-  Ordinary requests never read browser cookies, and SHIFT does not store them
+  **Retry with Chrome** explains the macOS Chrome Safe Storage permission
+  prompt before using your local Chrome session for that link only. Ordinary
+  requests never read browser cookies, and SHIFT does not store them
 
 ### Local video and audio
 
@@ -118,6 +121,11 @@ on-device. No accounts, no telemetry, no cloud uploads, no analytics.
 
 Analyzing and downloading a URL naturally requires network access. That path is
 intended for media you are authorized or legally permitted to download.
+SHIFT checks public destinations and confines media subprocesses to a local
+proxy that blocks private and loopback network targets. This supports public
+HTTP(S) media on ports 80 and 443; some unusual streams that require a direct
+FFmpeg network downloader cannot be fetched. See
+[`docs/URL_EGRESS.md`](docs/URL_EGRESS.md) for the boundary and limitations.
 
 ## Built with
 

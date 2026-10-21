@@ -148,7 +148,8 @@ Other public links) as plain, non-interactive labels; "Local files stay on your
 Mac." A broken engine replaces the source labels with a danger notice.
 
 While a link or file is being read: the input in a field-style row with a
-spinner, "Resolving link…" or "Reading file…", and a placeholder card. There
+spinner, "Resolving link…" or "Reading file…", and a placeholder card. A
+Chrome retry instead says to follow the macOS permission prompt. There
 are no invented steps and no Cancel (analysis cannot be stopped).
 
 A loaded single source shows a result card: thumbnail with duration, platform
@@ -238,9 +239,10 @@ message, the input, the hint, then actions: **Paste Another Link** / **Choose
 Another File…** / **Start Over**, and **Try Again** after an input failure or
 **Reopen File / Reopen Link** after an export failure (retry repeats the input,
 not the export). When YouTube asks for browser verification the error offers
-**Retry with Chrome** instead, with a note that the local Chrome session is
-used for this request and nothing is stored; a failed Chrome attempt offers
-only **Start Over**. Technical details stay collapsed, in mono, wrapping and
+**Retry with Chrome** instead. It opens a permission explanation with
+**Continue with Chrome** and **Cancel**; the local Chrome session is used for
+this request and nothing is stored. A denied or unavailable Chrome session
+offers **Retry with Chrome** and **Start Over**. Technical details stay collapsed, in mono, wrapping and
 scrolling within the panel.
 
 ## Motion

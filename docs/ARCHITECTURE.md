@@ -68,6 +68,10 @@ as a narrow fallback while yt-dlp continues to own network acquisition. A
 single active item feeds preview and conversion; multiple selected items are
 downloaded to one folder with their native extensions. Every thumbnail uses a
 per-item cache directory, and resetting the shift removes the whole post cache.
+Public LinkedIn videos and supported `lnkd.in` short links use the same yt-dlp
+provider as other compatible public websites. The short-link resolver checks
+each redirect before extraction; later page, preview and export requests pass
+through the checked egress boundary described in [`URL_EGRESS.md`](URL_EGRESS.md).
 
 **A local image batch is an ordered list of single-image jobs.** The native
 multi-file picker and drag/drop feed paths to `state/shift.tsx`, which analyzes
@@ -83,10 +87,16 @@ failure, and cancellation keeps completed outputs.
 **Browser cookies are opt-in, per source.** A request runs with no browser
 session. When yt-dlp reports YouTube's bot check, the error is classified as
 `youtube_bot_check` and the UI offers **Retry with Chrome**; only that retry
-sets `BrowserSessionMode::Chrome`, which adds `--cookies-from-browser chrome`
+opens a permission explanation. **Continue with Chrome** sets
+`BrowserSessionMode::Chrome`, which adds `--cookies-from-browser chrome`
 for analysis, preview and export of that source. SHIFT never reads cookie
 values itself, and cookie lines are redacted from yt-dlp's error output before
-it becomes an error's technical details. New Shift or a new source returns to no session.
+it becomes an error's technical details. The UI stays in a resolving state
+while macOS handles Chrome Safe Storage authorization, and a denied or
+unavailable session gets a specific recoverable error. New Shift or a new
+source returns to no session. The yt-dlp subprocess keeps the network sandbox
+in Chrome mode; the sandbox permits read-only local Keychain access while its
+outbound traffic remains restricted to the checked proxy.
 
 **Progress is never invented.** FFmpeg's `-progress` stream divided by a known
 duration is a real percentage. yt-dlp reports bytes via `--progress-template`;

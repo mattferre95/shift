@@ -33,6 +33,10 @@ remain outside SHIFT's scope.
 
 Browser cookies are not read by default: yt-dlp user configuration is ignored.
 The existing explicit Chrome retry uses yt-dlp's domain-scoped cookie handling.
+Its permission explanation appears before the retry. The network sandbox also
+applies in Chrome mode; it permits local Keychain access while keeping network
+connections restricted to the checked proxy. A denied or unavailable Chrome
+session is reported as a specific error without storing session credentials.
 The proxy is a transport tunnel and cannot inspect HTTPS headers; it enforces
 destination reachability, while yt-dlp remains responsible for cookie origin
 matching. A local cross-domain redirect fixture checks that a cookie set for
