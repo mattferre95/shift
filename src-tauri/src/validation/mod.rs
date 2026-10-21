@@ -4,6 +4,8 @@
 use crate::errors::{Result, ShiftError};
 use std::path::{Path, PathBuf};
 use url::Url;
+pub(crate) mod public_url;
+pub use public_url::resolve_public_url;
 
 /// Accept only real http/https URLs. Rejects file:, data:, javascript:, and junk.
 pub fn validate_url(raw: &str) -> Result<Url> {
@@ -17,6 +19,9 @@ pub fn validate_url(raw: &str) -> Result<Url> {
         _ => return Err(ShiftError::invalid_url()),
     }
     if parsed.host_str().unwrap_or("").is_empty() {
+        return Err(ShiftError::invalid_url());
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
         return Err(ShiftError::invalid_url());
     }
     Ok(parsed)

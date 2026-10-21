@@ -55,7 +55,7 @@ pub struct LocalMedia {
 #[tauri::command]
 pub async fn analyze_url(url: String, browser_session: BrowserSessionMode) -> Result<UrlMedia> {
     tauri::async_runtime::spawn_blocking(move || {
-        let parsed = validation::validate_url(&url)?;
+        let parsed = validation::resolve_public_url(&validation::validate_url(&url)?)?;
         let provider = providers::for_url_with_session(&parsed, browser_session)
             .ok_or_else(|| ShiftError::new("no_provider", "SHIFT can't handle this link."))?;
         let cache = std::env::temp_dir()

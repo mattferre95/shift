@@ -16,6 +16,7 @@
 //! attribute, so no fork happens at all.
 
 use crate::errors::{Result, ShiftError};
+use crate::egress::{PublicProxy, NO_NETWORK_PROFILE};
 use std::io::{BufRead, BufReader};
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
@@ -200,13 +201,33 @@ pub fn run(
     }
     let path = resolve(bin)?;
 
-    let mut cmd = Command::new(&path);
-    cmd.args(args)
+    // Seatbelt is inherited by every descendant, including yt-dlp's ffmpeg
+    // and any external downloader. Failure to apply it fails the request;
+    // there is deliberately no unsandboxed retry.
+    let proxy = if bin == Binary::YtDlp { Some(PublicProxy::start()?) } else { None };
+    let profile = proxy.as_ref().map(PublicProxy::profile)
+        .unwrap_or_else(|| NO_NETWORK_PROFILE.to_string());
+    let mut protected_args = args.to_vec();
+    if let Some(proxy) = &proxy {
+        protected_args.splice(0..0, [
+            "--proxy".into(), format!("socks5://127.0.0.1:{}", proxy.port()),
+            // Keep HLS/DASH segment requests in yt-dlp's proxied downloader.
+            // If an extractor still invokes ffmpeg, Seatbelt blocks its direct
+            // network connections instead of silently escaping this boundary.
+            "--downloader".into(), "m3u8:native".into(),
+            "--downloader".into(), "dash:native".into(),
+        ]);
+    }
+    let mut cmd = Command::new("/usr/bin/sandbox-exec");
+    cmd.arg("-p").arg(&profile).arg(&path).args(&protected_args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         // Deny the child any inherited web/proxy surprises we did not set.
         .env_remove("LD_PRELOAD")
+        .env_remove("HTTP_PROXY").env_remove("HTTPS_PROXY").env_remove("ALL_PROXY")
+        .env_remove("http_proxy").env_remove("https_proxy").env_remove("all_proxy")
+        .env_remove("NO_PROXY").env_remove("no_proxy")
         // Its own process group, so SIGTERM reaches the whole tree on cancel.
         .process_group(0);
 

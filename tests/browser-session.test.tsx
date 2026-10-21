@@ -2,6 +2,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorState } from "@/features/export/ErrorState";
+import { Home } from "@/features/input/Home";
 import { ShiftProvider, useShift } from "@/state/shift";
 import * as ipc from "@/lib/ipc";
 
@@ -39,7 +40,9 @@ function Probe() {
     <button onClick={() => shift.setFormat("MP3")}>Choose MP3</button>
     <button onClick={shift.reset}>New Shift</button>
     <output data-testid="browser-session">{shift.browserSession}</output>
+    <output data-testid="screen">{shift.screen}</output>
     <output data-testid="format">{shift.format}</output>
+    {shift.screen === "empty" && shift.analyzing && <Home />}
     {shift.screen === "error" && <ErrorState />}
   </>;
 }
@@ -60,8 +63,15 @@ describe("YouTube browser-session retry", () => {
     await screen.findByRole("button", { name: "Retry with Chrome" });
     expect(ipc.analyzeUrl).toHaveBeenCalledTimes(1);
     expect(ipc.analyzeUrl).toHaveBeenCalledWith(url, "none");
-    expect(screen.getByText(/SHIFT does not store your cookies/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Retry with Chrome" }));
+    expect(screen.getByRole("dialog", { name: "Chrome permission required" })).toBeTruthy();
+    expect(screen.getByText(/SHIFT does not store your cookies/)).toBeTruthy();
+    expect(screen.queryByRole("textbox", { name: /password/i })).toBeNull();
+    expect(ipc.analyzeUrl).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(ipc.analyzeUrl).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "Retry with Chrome" }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue with Chrome" }));
     await waitFor(() => expect(ipc.analyzeUrl).toHaveBeenCalledWith(url, "chrome"));
     await waitFor(() => expect(screen.getByTestId("browser-session").textContent).toBe("chrome"));
     expect(playbackSpy).toHaveBeenCalledWith(
@@ -78,17 +88,22 @@ describe("YouTube browser-session retry", () => {
       .mockRejectedValueOnce(botError)
       .mockRejectedValueOnce({
         code: "chrome_session_unavailable", message: "Couldn't use the Chrome session.",
-        hint: "Check that Chrome has a usable local session, then start over.",
-        technical: "ERROR: Could not copy Chrome cookie database",
+        hint: "Try again and allow Chrome Safe Storage access when macOS asks.",
+        technical: "ERROR: Keychain access denied for Chrome Safe Storage",
       });
     render(<ShiftProvider><Probe /></ShiftProvider>);
     fireEvent.click(screen.getByRole("button", { name: "Load URL" }));
     fireEvent.click(await screen.findByRole("button", { name: "Retry with Chrome" }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue with Chrome" }));
     await screen.findByText("Couldn't use the Chrome session.");
-    expect(screen.queryByRole("button", { name: "Retry with Chrome" })).toBeNull();
+    expect(screen.getByText(/allow Chrome Safe Storage access/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry with Chrome" })).toBeTruthy();
     expect(ipc.analyzeUrl).toHaveBeenCalledTimes(2);
     fireEvent.click(screen.getByRole("button", { name: "Technical details" }));
-    expect(screen.getByText(/Could not copy Chrome cookie database/)).toBeTruthy();
+    expect(screen.getByText(/Keychain access denied/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Retry with Chrome" }));
+    expect(screen.getByRole("dialog", { name: "Chrome permission required" })).toBeTruthy();
+    expect(ipc.analyzeUrl).toHaveBeenCalledTimes(2);
   });
 
   it("keeps export choices when a loaded source needs Chrome for preview", async () => {
@@ -99,7 +114,40 @@ describe("YouTube browser-session retry", () => {
     playbackSpy.mockImplementation(() => ({ info: null, errorCode: "youtube_bot_check", errorDetails: botError }));
     fireEvent.click(screen.getByRole("button", { name: "Choose MP3" }));
     fireEvent.click(await screen.findByRole("button", { name: "Retry with Chrome" }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue with Chrome" }));
     await waitFor(() => expect(ipc.analyzeUrl).toHaveBeenCalledWith(url, "chrome"));
     expect(screen.getByTestId("format").textContent).toBe("MP3");
+  });
+
+  it("keeps the same Chrome request pending without showing a generic failure", async () => {
+    let resolveChrome!: (value: typeof media) => void;
+    vi.mocked(ipc.analyzeUrl).mockRejectedValueOnce(botError)
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveChrome = resolve; }));
+    render(<ShiftProvider><Probe /></ShiftProvider>);
+    fireEvent.click(screen.getByRole("button", { name: "Load URL" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Retry with Chrome" }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue with Chrome" }));
+    await waitFor(() => expect(screen.getByTestId("screen").textContent).toBe("empty"));
+    expect(screen.getByText(/Follow the macOS permission prompt if it appears/)).toBeTruthy();
+    expect(screen.queryByText("Something went wrong.")).toBeNull();
+    expect(screen.queryByText("Couldn't open this link")).toBeNull();
+    resolveChrome(media);
+    await waitFor(() => expect(screen.getByTestId("screen").textContent).toBe("url"));
+    expect(screen.getByTestId("browser-session").textContent).toBe("chrome");
+  });
+
+  it("shows the Chrome-session recovery action when preview access fails", async () => {
+    vi.mocked(ipc.analyzeUrl).mockRejectedValueOnce(botError).mockResolvedValue(media);
+    render(<ShiftProvider><Probe /></ShiftProvider>);
+    fireEvent.click(screen.getByRole("button", { name: "Load URL" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Retry with Chrome" }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue with Chrome" }));
+    await waitFor(() => expect(screen.getByTestId("screen").textContent).toBe("url"));
+    playbackSpy.mockImplementation(() => ({ info: null, errorCode: "chrome_session_unavailable", errorDetails: {
+      code: "chrome_session_unavailable", message: "Couldn't use the Chrome session.", hint: null, technical: null,
+    } }));
+    fireEvent.click(screen.getByRole("button", { name: "Choose MP3" }));
+    await screen.findByText("Couldn't use the Chrome session.");
+    expect(screen.getByRole("button", { name: "Retry with Chrome" })).toBeTruthy();
   });
 });

@@ -80,8 +80,8 @@ fn rejects_a_link_no_provider_can_read() {
         .analyze(&url, &workspace("bad"), &CancelToken::new())
         .expect_err("a page with no media must fail");
     // The user sees a sentence, not a stack trace.
-    assert_eq!(err.code, "fetch_failed");
-    assert_eq!(err.message, "Couldn't fetch this link.");
+    assert_eq!(err.code, "unsupported_media_page");
+    assert_eq!(err.message, "No supported video was found on this page.");
     assert!(err.technical.is_some(), "the raw log must be kept for the details panel");
     println!("user sees: {} / {:?}", err.message, err.hint);
 }

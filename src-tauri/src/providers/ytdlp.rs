@@ -49,8 +49,11 @@ impl YtDlpProvider {
 
 /// The sole place that adds browser-session arguments to yt-dlp commands.
 fn command_args(mode: BrowserSessionMode, mut args: Vec<String>) -> Vec<String> {
+    // A user's yt-dlp config could otherwise enable cookies without SHIFT's
+    // explicit Retry with Chrome action.
+    args.insert(0, "--ignore-config".into());
     if mode == BrowserSessionMode::Chrome {
-        args.splice(0..0, ["--cookies-from-browser".into(), "chrome".into()]);
+        args.splice(1..1, ["--cookies-from-browser".into(), "chrome".into()]);
     }
     args
 }
@@ -63,7 +66,9 @@ fn diagnostic_log(out: &ProcOutput, mode: BrowserSessionMode) -> String {
     log.lines()
         .map(|line| {
             let lower = line.to_ascii_lowercase();
-            if lower.contains("cookie:") || lower.contains("set-cookie") || lower.contains("cookie value") {
+            if lower.contains("cookie:") || lower.contains("\"cookie\":")
+                || lower.contains("set-cookie") || lower.contains("cookie value")
+                || lower.contains("sid=") || lower.contains("sapisid=") {
                 "[cookie details omitted]"
             } else {
                 line
@@ -176,7 +181,12 @@ impl UrlProvider for YtDlpProvider {
                 }
             }
         }
-        direct.ok_or_else(|| ytdlp_error(url, &platform, diagnostic_log(&out, self.browser_session), self.browser_session, false))
+        match direct {
+            Some(post) if !post.media_items.is_empty() => Ok(post),
+            Some(_) => Err(ShiftError::new("no_downloadable_video", "No downloadable media was found.")
+                .hint("The page may not expose a public video stream.")),
+            None => Err(ytdlp_error(url, &platform, diagnostic_log(&out, self.browser_session), self.browser_session, false)),
+        }
     }
 
     fn download(
@@ -757,6 +767,8 @@ fn platform_for(url: &Url) -> String {
         "Instagram"
     } else if host.ends_with("tiktok.com") {
         "TikTok"
+    } else if host == "linkedin.com" || host.ends_with(".linkedin.com") {
+        "LinkedIn"
     } else {
         host
     }
@@ -858,10 +870,14 @@ fn ytdlp_error(
     download: bool,
 ) -> ShiftError {
     let lower = technical.to_ascii_lowercase();
-    if mode == BrowserSessionMode::Chrome && chrome_cookie_failure(&lower)
-    {
+    if mode == BrowserSessionMode::Chrome && chrome_cookie_failure(&lower) {
+        let hint = if chrome_permission_denied(&lower) {
+            "Try again and allow Chrome Safe Storage access when macOS asks."
+        } else {
+            "Check that Chrome has a usable local session, then retry."
+        };
         return ShiftError::new("chrome_session_unavailable", "Couldn't use the Chrome session.")
-            .hint("Check that Chrome has a usable local session, then start over.")
+            .hint(hint)
             .technical(technical);
     }
     if is_youtube(url) {
@@ -876,10 +892,49 @@ fn ytdlp_error(
                 .technical(technical);
         }
     }
+    if lower.contains("drm") || lower.contains("widevine") || lower.contains("fairplay") {
+        return ShiftError::new("drm_protected", "This video is DRM protected.")
+            .hint("SHIFT cannot download protected streams.").technical(technical);
+    }
+    if lower.contains("private") || lower.contains("restricted content") || lower.contains("members-only") {
+        return ShiftError::new("private_post", "This media is private or restricted.")
+            .hint("SHIFT can only access media your session is allowed to view.").technical(technical);
+    }
+    if lower.contains("login") || lower.contains("log in") || lower.contains("sign in")
+        || lower.contains("authentication required") || lower.contains("cookies are required") {
+        return ShiftError::new("auth_required", "This media requires sign-in.")
+            .hint("Open the link in a browser to check whether it requires an account.").technical(technical);
+    }
+    if lower.contains("403") || lower.contains("access denied") || lower.contains("forbidden") {
+        return ShiftError::new("access_denied", "Access to this media was denied.").technical(technical);
+    }
+    if lower.contains("404") || lower.contains("not found") || lower.contains("unavailable")
+        || lower.contains("expired") || lower.contains("removed") {
+        return ShiftError::new("media_unavailable", "This media is unavailable or expired.").technical(technical);
+    }
+    if lower.contains("no video formats") || lower.contains("no downloadable media")
+        || lower.contains("no video could be found") {
+        return ShiftError::new("no_downloadable_video", "No downloadable video was found.")
+            .hint("The page may not expose a public video stream.").technical(technical);
+    }
+    if lower.contains("unsupported url") {
+        return ShiftError::new("unsupported_media_page", "No supported video was found on this page.")
+            .hint("Try a direct link to the video or its public post.").technical(technical);
+    }
+    if lower.contains("unable to extract") {
+        return ShiftError::new("extractor_incompatible", "This page's video format isn't supported yet.")
+            .hint("The site may have changed how it exposes media.").technical(technical);
+    }
+    if lower.contains("timed out") || lower.contains("network timeout") || lower.contains("network is unreachable")
+        || lower.contains("could not resolve") || lower.contains("connection error") {
+        return ShiftError::new("network_error", "Couldn't reach this media source.").technical(technical);
+    }
     if download {
         ShiftError::download_failed(technical)
     } else {
-        social_error(platform, technical)
+        if is_social(platform) { social_error(platform, technical) }
+        else { ShiftError::new("unsupported_media_page", "No supported video was found on this page.")
+            .hint("Try a direct link to the video or its public post.").technical(technical) }
     }
 }
 
@@ -888,12 +943,23 @@ fn chrome_cookie_failure(technical: &str) -> bool {
         let failure = line.contains("could not")
             || line.contains("failed")
             || line.contains("unable")
-            || line.contains("permission denied");
+            || line.contains("denied")
+            || line.contains("unavailable")
+            || line.contains("not found");
         let store = (line.contains("cookie")
-            && (line.contains("database") || line.contains("extract") || line.contains("decrypt")))
+            && (line.contains("database") || line.contains("extract") || line.contains("decrypt") || line.contains("key")))
             || line.contains("chrome profile")
-            || line.contains("keyring");
+            || line.contains("keyring")
+            || line.contains("keychain")
+            || line.contains("chrome safe storage");
         failure && store
+    })
+}
+
+fn chrome_permission_denied(technical: &str) -> bool {
+    technical.lines().any(|line| {
+        (line.contains("denied") || line.contains("not allowed"))
+            && (line.contains("keychain") || line.contains("chrome safe storage") || line.contains("cookie"))
     })
 }
 
@@ -982,16 +1048,68 @@ mod tests {
     fn browser_session_arguments_are_opt_in_for_analysis_and_download() {
         let url = Url::parse("https://www.youtube.com/watch?v=mKaioltf6Os").unwrap();
         let normal = command_args(BrowserSessionMode::None, vec!["--dump-single-json".into(), url.to_string()]);
+        assert_eq!(normal.first().unwrap(), "--ignore-config");
         assert!(!normal.iter().any(|arg| arg == "--cookies-from-browser"));
         let chrome = command_args(BrowserSessionMode::Chrome, vec!["--dump-single-json".into(), url.to_string()]);
-        assert_eq!(&chrome[..2], ["--cookies-from-browser", "chrome"]);
+        assert_eq!(&chrome[..3], ["--ignore-config", "--cookies-from-browser", "chrome"]);
         assert_eq!(chrome.iter().filter(|arg| *arg == "--cookies-from-browser").count(), 1);
 
         for kind in [DownloadKind::PreviewVideo, DownloadKind::Video, DownloadKind::Audio] {
             let args = download_args(&url, kind, "best", Path::new("/tmp/shift-test"), BrowserSessionMode::Chrome);
-            assert_eq!(&args[..2], ["--cookies-from-browser", "chrome"]);
+            assert_eq!(&args[..3], ["--ignore-config", "--cookies-from-browser", "chrome"]);
             assert_eq!(args.iter().filter(|arg| *arg == "--cookies-from-browser").count(), 1);
             assert!(!args.join(" ").contains("COOKIE_SECRET"));
+        }
+    }
+
+    #[test]
+    fn linkedin_pages_and_generic_media_use_the_same_provider() {
+        let provider = YtDlpProvider::new();
+        for (raw, platform) in [
+            ("https://www.linkedin.com/posts/person-video-ugcPost-123-a/", "LinkedIn"),
+            ("https://www.linkedin.com/feed/update/urn:li:activity:123", "LinkedIn"),
+            ("https://cdn.example.com/video.mp4?token=keep", "cdn.example.com"),
+            ("https://cdn.example.com/master.m3u8?token=keep", "cdn.example.com"),
+            ("https://example.com/article-with-embed", "example.com"),
+        ] {
+            let url = Url::parse(raw).unwrap();
+            assert!(provider.handles(&url));
+            assert_eq!(platform_for(&url), platform);
+            let args = download_args(&url, DownloadKind::Video, "best", Path::new("/tmp/shift-test"), BrowserSessionMode::None);
+            assert_eq!(args.last().unwrap(), raw);
+            assert!(!args.contains(&"--cookies-from-browser".to_string()));
+        }
+    }
+
+    #[test]
+    fn public_linkedin_metadata_flows_to_preview_and_export_source() {
+        let url = Url::parse("https://www.linkedin.com/posts/person-ugcPost-123-a/").unwrap();
+        let info: RawInfo = serde_json::from_str(r#"{
+          "extractor_key":"LinkedIn", "title":"A useful public video", "id":"123",
+          "webpage_url":"https://www.linkedin.com/posts/person-ugcPost-123-a/",
+          "formats":[{"width":1080,"height":1920,"vcodec":"h264"}]
+        }"#).unwrap();
+        let post = post_from_ytdlp(&url, Path::new("/tmp"), &CancelToken::new(), info, BrowserSessionMode::None).unwrap();
+        assert_eq!(post.platform, "LinkedIn");
+        assert_eq!(post.media_items[0].source, url.as_str());
+        assert_eq!(post.media_items[0].media_type, PostMediaType::Video);
+        assert_eq!(post.media_items[0].height, Some(1920));
+    }
+
+    #[test]
+    fn failure_reasons_do_not_fall_through_to_generic_download() {
+        let url = Url::parse("https://www.linkedin.com/posts/person-ugcPost-123-a/").unwrap();
+        for (diagnostic, expected) in [
+            ("ERROR: login required", "auth_required"),
+            ("ERROR: HTTP Error 403: Forbidden", "access_denied"),
+            ("ERROR: DRM protected", "drm_protected"),
+            ("ERROR: video expired", "media_unavailable"),
+            ("ERROR: Unable to extract video", "extractor_incompatible"),
+            ("ERROR: unsupported URL", "unsupported_media_page"),
+            ("ERROR: No video formats found", "no_downloadable_video"),
+            ("ERROR: timed out", "network_error"),
+        ] {
+            assert_eq!(ytdlp_error(&url, "LinkedIn", diagnostic.into(), BrowserSessionMode::None, false).code, expected);
         }
     }
 
@@ -1002,7 +1120,7 @@ mod tests {
         let error = ytdlp_error(&youtube, "YouTube", bot.into(), BrowserSessionMode::None, false);
         assert_eq!(error.code, "youtube_bot_check");
         assert!(error.technical.as_deref().unwrap().contains("Sign in to confirm"));
-        assert_eq!(ytdlp_error(&youtube, "YouTube", "exit status 1\nnetwork timeout".into(), BrowserSessionMode::None, false).code, "fetch_failed");
+        assert_eq!(ytdlp_error(&youtube, "YouTube", "exit status 1\nnetwork timeout".into(), BrowserSessionMode::None, false).code, "network_error");
         assert_eq!(ytdlp_error(&youtube, "YouTube", "ERROR: Private video. Sign in".into(), BrowserSessionMode::None, false).code, "private_post");
         assert_eq!(social_error("Instagram", "Private post. Sign in".into()).code, "private_post");
         let other = Url::parse("https://example.com/video").unwrap();
@@ -1018,11 +1136,29 @@ mod tests {
             success: false,
             code: Some(1),
             stdout: String::new(),
-            stderr: "ERROR: Could not copy Chrome cookie database\nCookie: SID=COOKIE_SECRET".into(),
+            stderr: "ERROR: Could not copy Chrome cookie database\nCookie: SID=COOKIE_SECRET\n{\"Cookie\":\"SID=OTHER_SECRET\"}".into(),
         };
         let technical = diagnostic_log(&out, BrowserSessionMode::Chrome);
         assert!(technical.contains("Could not copy Chrome cookie database"));
         assert!(!technical.contains("COOKIE_SECRET"));
+        assert!(!technical.contains("OTHER_SECRET"));
+    }
+
+    #[test]
+    fn keychain_denial_and_unavailable_storage_are_narrowly_classified() {
+        let url = Url::parse("https://www.youtube.com/watch?v=mKaioltf6Os").unwrap();
+        let denied = ytdlp_error(&url, "YouTube", "ERROR: Keychain access denied for Chrome Safe Storage".into(), BrowserSessionMode::Chrome, false);
+        assert_eq!(denied.code, "chrome_session_unavailable");
+        assert!(denied.hint.unwrap().contains("allow Chrome Safe Storage"));
+        for evidence in [
+            "ERROR: Chrome Safe Storage unavailable",
+            "ERROR: failed to decrypt Chrome cookies",
+            "ERROR: could not extract Chrome cookies",
+        ] {
+            assert_eq!(ytdlp_error(&url, "YouTube", evidence.into(), BrowserSessionMode::Chrome, false).code, "chrome_session_unavailable");
+        }
+        assert_eq!(ytdlp_error(&url, "YouTube", "ERROR: network timeout".into(), BrowserSessionMode::Chrome, false).code, "network_error");
+        assert_eq!(ytdlp_error(&url, "YouTube", "ERROR: Keychain access denied for Chrome Safe Storage".into(), BrowserSessionMode::None, false).code, "access_denied");
     }
 
     #[test]

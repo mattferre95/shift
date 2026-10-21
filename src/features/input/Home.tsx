@@ -189,7 +189,7 @@ function PlatformRow() {
  * there is no step list and no Cancel.
  */
 export function Resolving() {
-  const { lastInput } = useShift();
+  const { lastInput, browserSession } = useShift();
   const isUrl = lastInput?.kind !== "file";
   const name = lastInput?.kind === "file" ? lastInput.value.split("/").pop() : lastInput?.value;
 
@@ -201,7 +201,9 @@ export function Resolving() {
         <Spinner />
       </div>
       <div role="status" aria-live="polite" className="px-1 text-[13px] text-shift-dim">
-        {isUrl ? "Resolving link…" : "Reading file…"}
+        {isUrl && browserSession === "chrome"
+          ? "Using your Chrome session… Follow the macOS permission prompt if it appears."
+          : isUrl ? "Resolving link…" : "Reading file…"}
       </div>
       <div className="shift-panel grid grid-cols-[minmax(150px,240px)_1fr] gap-5 p-4" aria-hidden="true">
         <div className="shift-skeleton aspect-video rounded-[10px]" />

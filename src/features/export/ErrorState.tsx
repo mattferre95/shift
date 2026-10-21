@@ -10,11 +10,13 @@ import { useShift } from "@/state/shift";
 export function ErrorState({ during = "input" }: { during?: "input" | "export" }) {
   const { error, browserSession, retry, retryWithChrome, reset, openFilePicker, lastInput, urlMedia } = useShift();
   const [open, setOpen] = useState(false);
+  const [confirmChrome, setConfirmChrome] = useState(false);
   const code = error?.code ?? "";
   const icon = code === "private_post" ? LOCK : code === "missing_binary" ? PLUG : ALERT;
   const isFile = lastInput?.kind === "file";
   const chromeChallenge = code === "youtube_bot_check" && browserSession === "none" && lastInput?.kind === "url";
-  const chromeAttemptFailed = browserSession === "chrome";
+  const chromeFailure = code === "chrome_session_unavailable" && browserSession === "chrome";
+  const chromeRetry = chromeChallenge || chromeFailure;
   // What failed, in a few words. `retry` repeats the last input, not an
   // export, so after a failed export it is offered as reopening the source.
   const eyebrow =
@@ -30,6 +32,23 @@ export function ErrorState({ during = "input" }: { during?: "input" | "export" }
           ? "Couldn't open this link"
           : null;
   const retryLabel = during === "export" ? (isFile ? "Reopen File" : "Reopen Link") : "Try Again";
+
+  if (confirmChrome && chromeRetry) {
+    return (
+      <HomeFrame width={460}>
+        <div role="dialog" aria-labelledby="chrome-permission-title" className="shift-panel flex flex-col items-center gap-4 px-8 py-8 text-center">
+          <h2 id="chrome-permission-title" className="m-0 text-[18px] font-semibold text-shift-text">Chrome permission required</h2>
+          <p className="m-0 max-w-[380px] text-[13.5px] leading-[1.5] text-shift-dim">
+            macOS may ask permission to access 'Chrome Safe Storage'. This lets the local downloader use your current YouTube browser session. SHIFT does not store your cookies.
+          </p>
+          <div className="flex gap-[10px]">
+            <Button onClick={() => setConfirmChrome(false)}>Cancel</Button>
+            <Button variant="primary" onClick={retryWithChrome}>Continue with Chrome</Button>
+          </div>
+        </div>
+      </HomeFrame>
+    );
+  }
 
   return (
     <HomeFrame width={460}>
@@ -62,7 +81,7 @@ export function ErrorState({ during = "input" }: { during?: "input" | "export" }
               if (lastInput?.kind === "file") openFilePicker();
             }}
           >
-            {chromeChallenge || chromeAttemptFailed
+            {chromeRetry
               ? "Start Over"
               : lastInput?.kind === "url"
               ? "Paste Another Link"
@@ -70,9 +89,9 @@ export function ErrorState({ during = "input" }: { during?: "input" | "export" }
                 ? "Choose Another File…"
                 : "Start Over"}
           </Button>
-          {chromeChallenge ? (
-            <Button variant="primary" onClick={retryWithChrome}>Retry with Chrome</Button>
-          ) : lastInput && !chromeAttemptFailed ? (
+          {chromeRetry ? (
+            <Button variant="primary" onClick={() => setConfirmChrome(true)}>Retry with Chrome</Button>
+          ) : lastInput ? (
             <Button variant="primary" onClick={retry}>
               {retryLabel}
             </Button>

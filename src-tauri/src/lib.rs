@@ -1,5 +1,6 @@
 pub mod commands;
 pub mod errors;
+mod egress;
 pub mod filesystem;
 pub mod jobs;
 pub mod media;

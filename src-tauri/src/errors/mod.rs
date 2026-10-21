@@ -34,7 +34,7 @@ impl ShiftError {
         let t = t.trim();
         if !t.is_empty() {
             // Keep the log useful but bounded; tails carry the actual failure.
-            self.technical = Some(tail(t, 8_000));
+            self.technical = Some(tail(&redact_url_queries(t), 8_000));
         }
         self
     }
@@ -111,6 +111,49 @@ fn tail(s: &str, max: usize) -> String {
     let start = s.len() - max;
     let start = (start..s.len()).find(|i| s.is_char_boundary(*i)).unwrap_or(s.len());
     format!("…\n{}", &s[start..])
+}
+
+/// Extractor stderr can echo signed media URLs. Keep the host/path useful for
+/// diagnosis without exposing query credentials or access tokens to the UI.
+fn redact_url_queries(text: &str) -> String {
+    let mut output = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(index) = [rest.find("https://"), rest.find("http://")].into_iter().flatten().min() {
+        output.push_str(&rest[..index]);
+        rest = &rest[index..];
+        let end = rest.find(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>'))
+            .unwrap_or(rest.len());
+        let candidate = &rest[..end];
+        if let Ok(mut url) = url::Url::parse(candidate) {
+            if url.query().is_some() || url.fragment().is_some() || !url.username().is_empty() {
+                let _ = url.set_username("");
+                let _ = url.set_password(None);
+                url.set_query(None);
+                url.set_fragment(None);
+                output.push_str(url.as_str());
+                output.push_str("?[redacted]");
+            } else {
+                output.push_str(candidate);
+            }
+        } else {
+            output.push_str(candidate);
+        }
+        rest = &rest[end..];
+    }
+    output.push_str(rest);
+    output
+}
+
+#[cfg(test)]
+mod privacy_tests {
+    use super::*;
+    #[test]
+    fn technical_details_hide_signed_query_parameters() {
+        let error = ShiftError::fetch_failed("ERROR https://cdn.example/video.mp4?token=secret&expires=9 failed");
+        let detail = error.technical.unwrap();
+        assert!(!detail.contains("secret"));
+        assert!(detail.contains("cdn.example/video.mp4"));
+    }
 }
 
 pub type Result<T> = std::result::Result<T, ShiftError>;

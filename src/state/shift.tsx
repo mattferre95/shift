@@ -370,7 +370,11 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
       if (!/^https?:\/\//i.test(value)) return;
       const generation = ++sourceGeneration.current;
       lastInput.current = { kind: "url", value };
-      patch({ analyzing: true, error: null, dragging: false, browserSession });
+      // A Chrome retry can begin from the error screen. Leave that screen
+      // immediately, or its cleared error renders as "Something went wrong"
+      // while yt-dlp is still waiting for the native Keychain prompt.
+      set((prev) => ({ ...prev, analyzing: true, error: null, dragging: false,
+        browserSession, screen: browserSession === "chrome" ? "empty" : prev.screen }));
       ipc
         .analyzeUrl(value, browserSession)
         .then((media) => {
@@ -570,10 +574,11 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
     activeMedia,
   );
   useEffect(() => {
-    if (s.screen === "url" && playback.errorDetails?.code === "youtube_bot_check") {
+    if (s.screen === "url" && (playback.errorDetails?.code === "youtube_bot_check"
+      || (s.browserSession === "chrome" && playback.errorDetails?.code === "chrome_session_unavailable"))) {
       patch({ screen: "error", error: playback.errorDetails });
     }
-  }, [s.screen, playback.errorDetails, patch]);
+  }, [s.screen, s.browserSession, playback.errorDetails, patch]);
   const duration = playback.info?.duration ?? activeMedia?.duration ?? s.localMedia?.duration ?? null;
 
   // Source-quality selection is real for a remote video, where yt-dlp actually
@@ -976,7 +981,9 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
 
   const retryWithChrome = useCallback(() => {
     const last = lastInput.current;
-    if (last?.kind === "url" && (s.error?.code === "youtube_bot_check" || playback.errorCode === "youtube_bot_check") && s.browserSession === "none") {
+    const botCheck = (s.error?.code === "youtube_bot_check" || playback.errorCode === "youtube_bot_check") && s.browserSession === "none";
+    const chromeFailure = s.error?.code === "chrome_session_unavailable" && s.browserSession === "chrome";
+    if (last?.kind === "url" && (botCheck || chromeFailure)) {
       submitUrl(last.value, "chrome", true);
     }
   }, [submitUrl, s.error, s.browserSession, playback.errorCode]);
