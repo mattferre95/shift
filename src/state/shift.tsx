@@ -88,6 +88,7 @@ interface Job {
 interface ShiftState {
   screen: Screen;
   analyzing: boolean;
+  analysisStage: "resolvingLink" | "fetchingMediaInformation" | null;
   dragging: boolean;
   urlMedia: UrlMedia | null;
   activeMediaIndex: number;
@@ -210,6 +211,7 @@ interface ShiftApi extends ShiftState {
 const initial: ShiftState = {
   screen: "empty",
   analyzing: false,
+  analysisStage: null,
   dragging: false,
   urlMedia: null,
   activeMediaIndex: 0,
@@ -264,6 +266,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
   const [s, set] = useState<ShiftState>(initial);
   // True while the Save panel is open, so the action cannot be fired twice.
   const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
   // A UI preference rather than part of the request: the backend is told a
   // width and a height, never how the user arrived at them.
   const [aspectLocked, setAspectLocked] = useState(true);
@@ -278,6 +281,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
   const awaitingJobId = useRef(false);
   const retiredJobs = useRef(new Set<string>());
   const sourceGeneration = useRef(0);
+  const pendingUrl = useRef(false);
   const batchRun = useRef<{ cancelled: boolean; itemId: string | null; resolve: ((event: JobEvent) => void) | null } | null>(null);
 
   useEffect(() => {
@@ -367,18 +371,33 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
   const submitUrl = useCallback(
     (raw: string, browserSession: BrowserSessionMode = "none", preserveSettings = false) => {
       const value = raw.trim();
-      if (!/^https?:\/\//i.test(value)) return;
+      if (!/^https?:\/\//i.test(value) || pendingUrl.current) return;
+      pendingUrl.current = true;
       const generation = ++sourceGeneration.current;
+      const requestId = crypto.randomUUID();
+      const started = performance.now();
+      let redirectMs: number | null = null;
       lastInput.current = { kind: "url", value };
       // A Chrome retry can begin from the error screen. Leave that screen
       // immediately, or its cleared error renders as "Something went wrong"
       // while yt-dlp is still waiting for the native Keychain prompt.
-      set((prev) => ({ ...prev, analyzing: true, error: null, dragging: false,
+      set((prev) => ({ ...prev, analyzing: true, analysisStage: "resolvingLink", error: null, dragging: false,
         browserSession, screen: browserSession === "chrome" ? "empty" : prev.screen }));
-      ipc
-        .analyzeUrl(value, browserSession)
+      let unlisten: (() => void) | null = null;
+      const analyze = async () => {
+        try {
+          unlisten = await ipc.onAnalysisEvent((event) => {
+            if (generation !== sourceGeneration.current || event.requestId !== requestId) return;
+            redirectMs = event.elapsedMs;
+            patch({ analysisStage: "fetchingMediaInformation" });
+          });
+        } catch { /* Analysis remains available if the optional stage listener fails. */ }
+        return ipc.analyzeUrl(value, browserSession, requestId);
+      };
+      void analyze()
         .then((media) => {
           if (generation !== sourceGeneration.current) return;
+          if (import.meta.env.DEV && import.meta.env.MODE !== "test") console.debug("[SHIFT timing] URL analysis", { redirectMs, totalMs: Math.round(performance.now() - started) });
           const first = media.mediaItems[0];
           if (!first) throw new Error("No downloadable media was found.");
           const defaultOut: OutputFormat =
@@ -396,6 +415,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
               ...prev,
               screen: "url",
               analyzing: false,
+              analysisStage: null,
               urlMedia: media,
               activeMediaIndex: activeIndex,
               selectedMediaIds: sameSource ? selected : media.mediaItems.map((item) => item.id),
@@ -424,14 +444,16 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
         })
         .catch((e) => {
           if (generation === sourceGeneration.current)
-            patch({ analyzing: false, screen: "error", error: ipc.toShiftError(e) });
-        });
+            patch({ analyzing: false, analysisStage: null, screen: "error", error: ipc.toShiftError(e) });
+        })
+        .finally(() => { unlisten?.(); if (generation === sourceGeneration.current) pendingUrl.current = false; });
     },
     [patch],
   );
 
   const acceptFile = useCallback(
     (path: string) => {
+      pendingUrl.current = false;
       const generation = ++sourceGeneration.current;
       lastInput.current = { kind: "file", value: path };
       patch({ analyzing: true, error: null, inputWarning: null, dragging: false });
@@ -480,6 +502,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
   const acceptPaths = useCallback(
     (paths: string[]) => {
       if (!paths.length || s.analyzing) return;
+      pendingUrl.current = false;
       if (paths.length === 1 && !s.batch) { acceptFile(paths[0]); return; }
       const generation = ++sourceGeneration.current;
       lastInput.current = null;
@@ -559,7 +582,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
   // A post with several items downloads its original files and is shown from
   // its thumbnails; nothing plays, so no preview is prepared for it.
   const multiPost = (s.urlMedia?.mediaItems.length ?? 0) > 1;
-  const playbackInput = multiPost || s.analyzing
+  const playbackInput = multiPost
     ? null
     : activeMedia && activeMedia.type !== "image"
     ? { kind: "url" as const, url: activeMedia.source, quality: s.quality, browserSession: s.browserSession }
@@ -570,7 +593,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
   // remains lazy because it is already immediately available from disk.
   const playback = usePlayback(
     playbackInput,
-    (!!activeMedia && activeMedia.type !== "image") || s.clipEnabled,
+    !!playbackInput,
     activeMedia,
   );
   useEffect(() => {
@@ -659,18 +682,8 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
   }, [sourceW, sourceH, s.aspect, isLoop, s.loopSize, patch]);
 
   // ---- preview material ---------------------------------------------------
-  // One cheap image per source, cached in the native layer. Cycling through
-  // ratios never touches this effect: it depends on the file alone. Moving
-  // media uses one representative frame from the middle, whether or not a trim
-  // is set, so the framing preview has a picture in every state and dragging
-  // IN never asks for a fresh extraction.
-  const previewAt = useMemo(() => {
-    if (s.localMedia?.kind === "image" || activeMedia?.type === "image") return null;
-    // Whole seconds only, so the native cache is hit on every repeat.
-    const seconds = s.localMedia?.duration ?? playback.info?.duration ?? activeMedia?.duration;
-    return seconds ? Math.floor(seconds / 2) : null;
-  }, [s.localMedia, playback.info?.duration, activeMedia]);
-
+  // The cached derivative is always the real opening frame. Its stable cache
+  // key avoids a second extraction when playback later reports a duration.
   const localPath = s.localMedia?.hasVideo || s.localMedia?.kind === "image"
     ? s.localMedia.path
     : activeMedia?.type === "video" ? playback.info?.path ?? null : null;
@@ -681,7 +694,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
     }
     let live = true;
     ipc
-      .previewSource(localPath, previewAt)
+      .previewSource(localPath, null)
       .then((uri) => live && patch({ previewSource: uri, previewError: null }))
       // A preview is a convenience: a failure explains itself inside the box
       // and never takes over the screen the way an export failure does.
@@ -693,7 +706,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
     return () => {
       live = false;
     };
-  }, [localPath, previewAt, patch]);
+  }, [localPath, patch]);
 
   const [validatedClip, setValidatedClip] = useState<string | null>(null);
   const clipKey = JSON.stringify([s.clipIn, s.clipOut, duration]);
@@ -754,9 +767,10 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
    * nothing is processed until the user confirms it.
    */
   const startExport = useCallback(async () => {
-    if (!canExport || saving) return;
+    if (!canExport || savingRef.current) return;
     const generation = sourceGeneration.current;
     if (s.batch) {
+      savingRef.current = true;
       setSaving(true);
       try {
         const { open } = await import("@tauri-apps/plugin-dialog");
@@ -809,13 +823,14 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
       } catch (error) {
         if (generation === sourceGeneration.current) patch({ screen: "batch", error: ipc.toShiftError(error), job: null });
         batchRun.current = null;
-      } finally { setSaving(false); }
+      } finally { savingRef.current = false; setSaving(false); }
       return;
     }
     const selectedItems = s.urlMedia?.mediaItems.filter((item) =>
       s.selectedMediaIds.includes(item.id),
     ) ?? [];
     if (s.urlMedia && s.urlMedia.mediaItems.length > 1) {
+      savingRef.current = true;
       setSaving(true);
       try {
         const { open } = await import("@tauri-apps/plugin-dialog");
@@ -869,6 +884,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
           patch({ screen: "error", error });
         }
       } finally {
+        savingRef.current = false;
         setSaving(false);
       }
       return;
@@ -896,6 +912,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
       destinationPath: null,
     };
 
+    savingRef.current = true;
     setSaving(true);
     try {
       // The backend owns the naming rules, so the panel is prefilled from it
@@ -933,9 +950,10 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
       if (generation === sourceGeneration.current)
         patch({ screen: "error", error: ipc.toShiftError(e) });
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
-  }, [canExport, saving, s.batch, s.urlMedia, s.selectedMediaIds, activeMedia, s.localMedia, s.quality, s.browserSession, s.format, s.soundEnabled, s.clipEnabled, s.clipIn, s.clipOut, s.outputDir, s.compression, s.loopSize, s.aspect, s.flip, duration, isImage, isLoop, showAspect, patch]);
+  }, [canExport, s.batch, s.urlMedia, s.selectedMediaIds, activeMedia, s.localMedia, s.quality, s.browserSession, s.format, s.soundEnabled, s.clipEnabled, s.clipIn, s.clipOut, s.outputDir, s.compression, s.loopSize, s.aspect, s.flip, duration, isImage, isLoop, showAspect, patch]);
 
   const cancel = useCallback(() => {
     if (batchRun.current) batchRun.current.cancelled = true;
@@ -950,6 +968,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
       return;
     }
     ++sourceGeneration.current;
+    pendingUrl.current = false;
     cancel();
     batchRun.current?.resolve?.({ jobId: jobRef.current ?? "", state: "cancelled", stageLabel: "", stageIndex: 0, stageCount: 1, progress: null, outputFilename: "", output: null, error: null, actions: [] });
     batchRun.current = null;
@@ -1055,28 +1074,8 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
           compression: allowed.includes(prev.compression) ? prev.compression : "none",
         };
 
-        // Picking a loop on a source longer than its cap turns the trim on and
-        // proposes a range, rather than letting the user walk into a refusal.
-        // It happens in plain sight — the toggle flips and the fields appear —
-        // and nothing stops them changing or switching it back off.
-        //
-        // This also re-arms when moving *between* loop formats, because the
-        // limits differ: a 20s range is a fine WEBP and too long as a GIF, and
-        // leaving it would strand the user on a disabled Export button.
-        const willLoop = isAnimationFormat(f) && sourceMoves && !isImage;
-        if (willLoop) {
-          const lim = loopLimit(f);
-          const current = prev.clipEnabled ? (prev.clipSeconds ?? 0) : (duration ?? 0);
-          if (current > lim.max) {
-            next.clipEnabled = true;
-            next.clipIn = "00:00.000";
-            next.clipOut = formatTimestamp(Math.min(lim.default, duration ?? lim.default));
-            next.clipDurationPreset =
-              lim.default === 10 || lim.default === 15 || lim.default === 30 || lim.default === 60
-                ? lim.default
-                : "custom";
-          }
-        }
+        // A format choice does not turn on Trim. Long loops remain visibly
+        // blocked until the user chooses a valid range themselves.
         return next;
       }),
     setCompression: (c) => patch({ compression: c }),
@@ -1183,8 +1182,9 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
     clearPostMedia: () => patch({ selectedMediaIds: [] }),
     toggleClip: () => set((prev) => ({ ...prev, clipEnabled: !prev.clipEnabled })),
     setClipDurationPreset: (preset) =>
-      set((prev) => ({
+      set((prev) => duration == null || duration <= 0 ? prev : ({
         ...prev,
+        clipEnabled: true,
         ...trimFields(applyTrimPreset(trimRangeFrom(prev, duration), preset, duration)),
       })),
     setClipIn: (v) =>

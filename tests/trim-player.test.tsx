@@ -7,14 +7,14 @@ vi.mock("@tauri-apps/api/core", () => ({convertFileSrc:(path:string)=>path}));
 let pause: ReturnType<typeof vi.fn>;
 let play: ReturnType<typeof vi.fn>;
 beforeEach(()=>{
- Object.assign(state,{duration:8,clipIn:"00:02.000",clipOut:"00:04.000",clipDurationPreset:15,clipError:null,clipLabel:"00:02.000",clipSeconds:2,soundEnabled:true,showAspect:false,aspectPreview:null,setClipDurationPreset:vi.fn(),setClipIn:vi.fn(),setClipOut:vi.fn(),resizeClipIn:vi.fn(),resizeClipOut:vi.fn(),moveClipRange:vi.fn(),playback:{info:{path:"/tone.mp3",duration:8,hasVideo:false,hasAudio:true,proxy:false},busy:false,error:null,status:"ready",cancel:vi.fn(),retry:vi.fn(),fallback:vi.fn(),markReady:vi.fn()}});
+ Object.assign(state,{duration:8,clipIn:"00:02.000",clipOut:"00:04.000",clipDurationPreset:15,clipEnabled:true,clipError:null,clipLabel:"00:02.000",clipSeconds:2,soundEnabled:true,showAspect:false,aspectPreview:null,setClipDurationPreset:vi.fn(),setClipIn:vi.fn(),setClipOut:vi.fn(),resizeClipIn:vi.fn(),resizeClipOut:vi.fn(),moveClipRange:vi.fn(),playback:{info:{path:"/tone.mp3",duration:8,hasVideo:false,hasAudio:true,proxy:false},busy:false,error:null,status:"ready",cancel:vi.fn(),retry:vi.fn(),fallback:vi.fn(),markReady:vi.fn()}});
  pause=vi.fn(function(this:HTMLMediaElement){Object.defineProperty(this,"paused",{value:true,configurable:true});this.dispatchEvent(new Event("pause"));});
  play=vi.fn(function(this:HTMLMediaElement){Object.defineProperty(this,"paused",{value:false,configurable:true});this.dispatchEvent(new Event("play"));return Promise.resolve();});
  vi.spyOn(HTMLMediaElement.prototype,"pause").mockImplementation(pause);
  vi.spyOn(HTMLMediaElement.prototype,"play").mockImplementation(play);
 });
 afterEach(cleanup);
-function setup(){ const view=render(<TrimPlayer/>);const video=view.container.querySelector("video")!;fireEvent.loadedMetadata(video);return {...view,video}; }
+function setup(){ const view=render(<TrimPlayer/>);const video=view.container.querySelector("video")!;fireEvent.loadedMetadata(video);fireEvent.canPlay(video);return {...view,video}; }
 test("play starts at beginning, seek leaves bounds alone, Set IN/OUT use the playhead",async()=>{
  const {video}=setup();fireEvent.click(screen.getByRole("button",{name:"Play",exact:true}));await act(async()=>{});expect(video.currentTime).toBe(0);expect(play).toHaveBeenCalled();
  fireEvent.change(screen.getByLabelText("Seek playback"),{target:{value:3}});expect(video.currentTime).toBe(3);expect(state.setClipIn).not.toHaveBeenCalled();expect(state.setClipOut).not.toHaveBeenCalled();
@@ -42,7 +42,7 @@ test("dragging the highlighted selection moves the whole range",()=>{
  expect(state.moveClipRange).toHaveBeenCalledWith(3);
 });
 test("invalid range cannot play selection; preview errors leave controls visible",()=>{
- state.clipError="OUT has to come after IN.";setup();expect((screen.getByText("Play Selection") as HTMLButtonElement).disabled).toBe(true);expect(screen.getByRole("status").textContent).toContain("OUT has to");
+ state.clipError="OUT has to come after IN.";setup();expect((screen.getByText("Play Selection") as HTMLButtonElement).disabled).toBe(true);expect(screen.getByText("OUT has to come after IN.")).toBeTruthy();
 });
 test("new source clears player position and failure requests proxy fallback",()=>{
  const {video,rerender}=setup();video.currentTime=3;fireEvent.timeUpdate(video);fireEvent.error(video);expect(state.playback.fallback).toHaveBeenCalled();
@@ -52,6 +52,37 @@ test("sound state mutes and unmutes the existing player immediately",()=>{
  const {video,rerender}=setup();expect(video.muted).toBe(false);
  state.soundEnabled=false;rerender(<TrimPlayer/>);expect(video.muted).toBe(true);
  state.soundEnabled=true;rerender(<TrimPlayer/>);expect(video.muted).toBe(false);
+});
+test("video waits for decoded frame pixels at time zero without autoplay",()=>{
+ state.sourceMoves=true;state.previewImage="data:image/png;base64,first";
+ state.playback.info={...state.playback.info,path:"/video.mp4",hasVideo:true};
+ const view=render(<TrimPlayer compact/>);const video=view.container.querySelector("video")!;
+ video.currentTime=2;fireEvent.loadedMetadata(video);
+ expect(video.currentTime).toBe(0);
+ expect(screen.getByText("Loading first frame…")).toBeTruthy();
+ expect((screen.getByRole("button",{name:"Play"}) as HTMLButtonElement).disabled).toBe(true);
+ expect(state.playback.markReady).not.toHaveBeenCalled();
+ expect(video.getAttribute("poster")).toBe("data:image/png;base64,first");
+ fireEvent.loadedData(video);
+ expect(screen.queryByText("Loading first frame…")).toBeNull();
+ expect(state.playback.markReady).toHaveBeenCalledTimes(1);
+ expect(play).not.toHaveBeenCalled();
+});
+test("a failed video preview replaces the spinner with retry",()=>{
+ state.playback.info={...state.playback.info,path:"/video.mp4",hasVideo:true};
+ const view=render(<TrimPlayer compact/>);
+ expect(screen.getByText("Loading first frame…")).toBeTruthy();
+ state.playback.error="Preview failed";view.rerender(<TrimPlayer compact/>);
+ expect(screen.queryByText("Loading first frame…")).toBeNull();
+ fireEvent.click(screen.getByRole("button",{name:"Retry Preview"}));
+ expect(state.playback.retry).toHaveBeenCalledTimes(1);
+});
+test("unknown duration keeps the timeline visible without a selectable range",()=>{
+ state.duration=null;state.clipOut="00:15.000";setup();
+ expect(screen.getByLabelText("Selected range")).toBeTruthy();
+ expect(screen.getByText("Duration unknown · IN/OUT available when measured")).toBeTruthy();
+ expect((screen.getByLabelText("IN marker") as HTMLInputElement).disabled).toBe(true);
+ expect(screen.queryByLabelText("OUT",{selector:"input"})).toBeNull();
 });
 test("space pauses only outside editing controls",async()=>{
  const {video}=setup();fireEvent.keyDown(screen.getByLabelText("Trim player"),{code:"Space"});await act(async()=>{});expect(play).toHaveBeenCalledTimes(1);

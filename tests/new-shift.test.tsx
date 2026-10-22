@@ -58,7 +58,7 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
-it("sidebar New Shift clears a local source, trim, framing, and returns navigation to Download", async () => {
+it("sidebar New Shift clears a local source, trim, framing, and returns navigation to Dashboard", async () => {
   vi.mocked(ipc.analyzeFile).mockImplementation(async (path) => local(path));
   let shift!: ReturnType<typeof useShift>;
   let view!: ReturnType<typeof useView>;
@@ -78,7 +78,7 @@ it("sidebar New Shift clears a local source, trim, framing, and returns navigati
   expect(view.view).toBe("resize");
   expect(shift.aspect.crop?.x).toBe(700);
   fireEvent.click(screen.getByRole("button", { name: "New Shift" }));
-  await waitFor(() => expect(view.view).toBe("download"));
+  await waitFor(() => expect(view.view).toBe("dashboard"));
   expect(shift).toMatchObject({
     screen: "empty", localMedia: null, urlMedia: null, previewSource: null,
     clipEnabled: false, clipIn: "00:00.000", clipOut: "00:15.000", clipDurationPreset: 15,
@@ -88,7 +88,7 @@ it("sidebar New Shift clears a local source, trim, framing, and returns navigati
   act(() => shift.acceptPaths(["/tmp/second.mp4"]));
   await waitFor(() => expect(shift.localMedia?.path).toBe("/tmp/second.mp4"));
   expect(shift.aspect.crop).toBeNull();
-  expect(view.view).toBe("download");
+  expect(view.view).toBe("dashboard");
 });
 
 it("clears URL metadata, thumbnails, social selections, and source choices", async () => {
@@ -163,10 +163,10 @@ it("cancels an active export, ignores late job events, and clears completed resu
 it("Command+N uses the same reset, skips IME composition, and is stable on empty input", async () => {
   vi.mocked(ipc.analyzeUrl).mockResolvedValue(url());
   render(<App />);
-  const field = screen.getByRole("textbox", { name: /Media link/ });
+  const field = screen.getByRole("textbox", { name: /Media URL/ });
   fireEvent.change(field, { target: { value: "https://example.com/post" } });
   fireEvent.click(screen.getByRole("button", { name: "New Shift" }));
-  expect(screen.getByRole("textbox", { name: /Media link/ })).toHaveProperty("value", "https://example.com/post");
+  expect(screen.getByRole("textbox", { name: /Media URL/ })).toHaveProperty("value", "https://example.com/post");
   expect(document.activeElement).toBe(field);
   fireEvent.click(screen.getByRole("button", { name: "Fetch" }));
   await waitFor(() => expect(screen.queryByText("Anything in. Anything out.")).toBeNull());

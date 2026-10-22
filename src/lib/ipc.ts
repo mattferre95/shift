@@ -21,6 +21,13 @@ import type {
 
 const JOB_EVENT = "shift://job";
 const PLAYBACK_EVENT = "shift://playback";
+const ANALYSIS_EVENT = "shift://analysis";
+
+export interface AnalysisEvent {
+  requestId: string;
+  stage: "fetchingMediaInformation";
+  elapsedMs: number;
+}
 
 export type PlaybackStage =
   | "resolvingLink"
@@ -38,8 +45,10 @@ export interface PlaybackEvent {
   detail: string | null;
 }
 
-export const analyzeUrl = (url: string, browserSession: BrowserSessionMode = "none") =>
-  invoke<UrlMedia>("analyze_url", { url, browserSession });
+export const analyzeUrl = (url: string, browserSession: BrowserSessionMode = "none", requestId?: string) =>
+  invoke<UrlMedia>("analyze_url", { url, browserSession, requestId });
+export const onAnalysisEvent = (handler: (event: AnalysisEvent) => void): Promise<UnlistenFn> =>
+  listen<AnalysisEvent>(ANALYSIS_EVENT, (e) => handler(e.payload));
 export const downloadPostItems = (items: PostMedia[], destinationDir: string, jobId: string, browserSession: BrowserSessionMode) =>
   invoke<PostDownloadResult>("download_post_items", {
     request: { items, destinationDir, jobId, browserSession },

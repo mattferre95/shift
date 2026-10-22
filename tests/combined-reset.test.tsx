@@ -55,7 +55,7 @@ it("New Shift clears the Chrome session together with flip, sound, framing and t
   act(() => shift.retryWithChrome());
   await waitFor(() => expect(shift.urlMedia?.url).toBe(url));
   expect(shift.browserSession).toBe("chrome");
-  expect(ipc.analyzeUrl).toHaveBeenLastCalledWith(url, "chrome");
+  expect(ipc.analyzeUrl).toHaveBeenLastCalledWith(url, "chrome", expect.any(String));
 
   // 3–5. Flip, sound, framing and trim on that source.
   act(() => shift.toggleFlip("horizontal"));
@@ -114,5 +114,5 @@ it("a Chrome retry for the same source keeps its flip, and a different link does
   await waitFor(() => expect(shift.urlMedia?.url).toBe(other));
   expect(shift.browserSession).toBe("none");
   expect(shift.flip).toEqual({ horizontal: false, vertical: false });
-  expect(ipc.analyzeUrl).toHaveBeenLastCalledWith(other, "none");
+  expect(ipc.analyzeUrl).toHaveBeenLastCalledWith(other, "none", expect.any(String));
 });

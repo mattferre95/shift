@@ -60,7 +60,7 @@ function useBox<T extends HTMLElement>() {
   return [ref, size] as const;
 }
 
-function FramingStage() {
+export function FramingStage({ compact = false }: { compact?: boolean }) {
   const s = useShift();
   const src = useSourceSize();
   const p = s.aspectPreview;
@@ -68,15 +68,15 @@ function FramingStage() {
   const original = s.aspect.ratio === "original";
 
   return (
-    <div className="shift-panel flex min-h-0 min-w-0 flex-col overflow-hidden">
-      <div ref={stageRef} className="relative min-h-[150px] flex-1 overflow-hidden" aria-label="Framing preview">
+    <div className={`shift-panel flex min-h-0 min-w-0 flex-col overflow-hidden ${compact ? "flex-1" : ""}`}>
+      <div ref={stageRef} className={`relative flex-1 overflow-hidden ${compact ? "min-h-0" : "min-h-[150px]"}`} aria-label="Framing preview">
         {stage && (original || !p ? <SourceOnly stage={stage} />
           : p.mode === "fill" && src.w && src.h && s.previewImage && !s.playback.busy
             ? <InteractiveFill stage={stage} source={{ w: src.w, h: src.h }} />
             : <Framed stage={stage} />)}
       </div>
 
-      <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 border-t border-[var(--hairline)] px-4 py-[10px]">
+      {!compact && <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 border-t border-[var(--hairline)] px-4 py-[10px]">
         <Dims label="Source" value={src.w && src.h ? `${src.w} × ${src.h}` : "—"} />
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true" className="stroke-shift-soft" strokeWidth="1.8" strokeLinecap="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
         <Dims
@@ -89,7 +89,7 @@ function FramingStage() {
             Framing is exact; the picture is the site's poster until the media is fetched.
           </span>
         )}
-      </div>
+      </div>}
     </div>
   );
 }

@@ -62,7 +62,7 @@ describe("YouTube browser-session retry", () => {
     fireEvent.click(screen.getByRole("button", { name: "Load URL" }));
     await screen.findByRole("button", { name: "Retry with Chrome" });
     expect(ipc.analyzeUrl).toHaveBeenCalledTimes(1);
-    expect(ipc.analyzeUrl).toHaveBeenCalledWith(url, "none");
+    expect(ipc.analyzeUrl).toHaveBeenCalledWith(url, "none", expect.any(String));
     fireEvent.click(screen.getByRole("button", { name: "Retry with Chrome" }));
     expect(screen.getByRole("dialog", { name: "Chrome permission required" })).toBeTruthy();
     expect(screen.getByText(/SHIFT does not store your cookies/)).toBeTruthy();
@@ -72,7 +72,7 @@ describe("YouTube browser-session retry", () => {
     expect(ipc.analyzeUrl).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole("button", { name: "Retry with Chrome" }));
     fireEvent.click(screen.getByRole("button", { name: "Continue with Chrome" }));
-    await waitFor(() => expect(ipc.analyzeUrl).toHaveBeenCalledWith(url, "chrome"));
+    await waitFor(() => expect(ipc.analyzeUrl).toHaveBeenCalledWith(url, "chrome", expect.any(String)));
     await waitFor(() => expect(screen.getByTestId("browser-session").textContent).toBe("chrome"));
     expect(playbackSpy).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "url", url, browserSession: "chrome" }),
@@ -115,7 +115,7 @@ describe("YouTube browser-session retry", () => {
     fireEvent.click(screen.getByRole("button", { name: "Choose MP3" }));
     fireEvent.click(await screen.findByRole("button", { name: "Retry with Chrome" }));
     fireEvent.click(screen.getByRole("button", { name: "Continue with Chrome" }));
-    await waitFor(() => expect(ipc.analyzeUrl).toHaveBeenCalledWith(url, "chrome"));
+    await waitFor(() => expect(ipc.analyzeUrl).toHaveBeenCalledWith(url, "chrome", expect.any(String)));
     expect(screen.getByTestId("format").textContent).toBe("MP3");
   });
 

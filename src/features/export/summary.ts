@@ -110,14 +110,14 @@ export function exportBlocker(s: Shift): string | null {
   if (s.clipEnabled && s.clipError) return s.clipError;
   if (s.loopTooLong) {
     const name = s.format === "GIF" ? "GIF" : "Animated WEBP";
-    return `${name} exports are limited to ${s.loopMaxSeconds} seconds. Shorten the range in Edit.`;
+    return `${name} exports are limited to ${s.loopMaxSeconds} seconds. Enable Trim and shorten the range.`;
   }
   if (
     s.showAspect &&
     s.aspect.ratio === "freeform" &&
     [s.aspect.width, s.aspect.height].some((v) => v == null || v < MIN_DIMENSION || v > MAX_DIMENSION)
   ) {
-    return `Set a size between ${MIN_DIMENSION} and ${MAX_DIMENSION} pixels in Resize.`;
+    return `Set a size between ${MIN_DIMENSION} and ${MAX_DIMENSION} pixels.`;
   }
   if (s.urlMedia && s.urlMedia.mediaItems.length > 1 && s.selectedMediaCount === 0) {
     return "Select at least one item to download.";

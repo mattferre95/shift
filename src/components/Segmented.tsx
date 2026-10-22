@@ -11,7 +11,7 @@ export function Segmented<T extends string | number>({
   size = "md",
 }: {
   options: { id: T; label: string; disabled?: boolean; title?: string }[];
-  value: T;
+  value: T | null;
   onChange: (id: T) => void;
   label: string;
   size?: "md" | "sm";

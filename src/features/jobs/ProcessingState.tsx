@@ -2,6 +2,7 @@ import { Button } from "@/components/Button";
 import { HomeFrame } from "@/features/input/Home";
 import { sourceName } from "@/features/input/sourceMeta";
 import { useShift } from "@/state/shift";
+import { Spinner } from "@/components/Spinner";
 
 /**
  * State D. The stage the native layer says it is in, how far through that
@@ -43,8 +44,8 @@ export function ProcessingState() {
 
         <div className="flex flex-col gap-3">
           <div className="flex items-baseline justify-between gap-3">
-            <h2 role="status" aria-live="polite" className="m-0 text-[19px] font-semibold text-shift-text">
-              {s.batch ? `Converting ${Math.min(completedBatchItems + 1, batchItems.length)} of ${batchItems.length}` : job?.stageLabel || "Preparing…"}
+            <h2 role="status" aria-live="polite" className="m-0 flex items-center gap-2 text-[19px] font-semibold text-shift-text">
+              <Spinner />{s.batch ? `Converting ${Math.min(completedBatchItems + 1, batchItems.length)} of ${batchItems.length}` : job?.stageLabel || "Preparing…"}
             </h2>
             {percent != null && <span className="font-mono text-[13px] text-shift-dim">{percent}%</span>}
           </div>

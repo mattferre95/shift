@@ -11,6 +11,7 @@
     "app:dev": "tauri dev",
     "app:build": "tauri build",
     "sidecars": "bash scripts/fetch-sidecars.sh",
+    "icons": "bash scripts/generate-icons.sh",
     "test": "vitest run"
   },
   "dependencies": {

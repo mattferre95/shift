@@ -10,9 +10,10 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useShift } from "./shift";
 
-export type View = "download" | "convert" | "edit" | "resize" | "compress";
+export type View = "dashboard" | "download" | "convert" | "edit" | "resize" | "compress";
 
 export const VIEWS: { id: View; label: string }[] = [
+  { id: "dashboard", label: "Dashboard" },
   { id: "download", label: "Download" },
   { id: "convert", label: "Convert" },
   { id: "edit", label: "Edit" },
@@ -30,7 +31,7 @@ const Ctx = createContext<ViewApi | null>(null);
 
 export function ViewProvider({ children }: { children: ReactNode }) {
   const s = useShift();
-  const [chosen, setChosen] = useState<View>("download");
+  const [chosen, setChosen] = useState<View>("dashboard");
 
   // A source is open and editable only while it is loaded. While a job
   // runs, or once it has finished, there is nothing for a mode to act on.
@@ -41,6 +42,7 @@ export function ViewProvider({ children }: { children: ReactNode }) {
   const editable = loaded && single;
   const available = useMemo<Record<View, boolean>>(
     () => ({
+      dashboard: true,
       download: true,
       convert: editable && s.outputs.length > 0,
       // Trim exists for anything that plays: video, audio and moving GIFs.
@@ -53,9 +55,8 @@ export function ViewProvider({ children }: { children: ReactNode }) {
     [editable, s.outputs.length, s.isImage, s.showAspect, s.compressionChoices.length],
   );
 
-  // A mode that stops applying — a new source, or an audio output picked in
-  // Convert — falls back to Download rather than showing controls for nothing.
-  const view: View = available[chosen] ? chosen : "download";
+  // A view that stops applying falls back to Dashboard, preserving the source.
+  const view: View = available[chosen] ? chosen : "dashboard";
 
   const setView = useCallback(
     (v: View) => {
@@ -65,15 +66,20 @@ export function ViewProvider({ children }: { children: ReactNode }) {
   );
 
   useEffect(() => {
-    if (s.screen === "empty" && !s.analyzing) setChosen("download");
+    if (s.screen === "empty" && !s.analyzing) setChosen("dashboard");
   }, [s.screen, s.analyzing]);
 
-  // ⌘1–⌘5, in sidebar order.
+  // Every newly accepted source returns to the unified workspace. Switching
+  // between the focused pages never changes the source or its edit settings.
+  const source = s.batch?.items[0]?.id ?? s.localMedia?.path ?? s.urlMedia?.url;
+  useEffect(() => { if (source) setChosen("dashboard"); }, [source]);
+
+  // ⌘0 opens Dashboard; ⌘1–⌘5 retain their focused-page mapping.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!e.metaKey || e.shiftKey || e.altKey || e.ctrlKey) return;
-      const index = Number(e.key) - 1;
-      const target = VIEWS[index];
+      if (e.key === "0") { e.preventDefault(); setView("dashboard"); return; }
+      const target = VIEWS[Number(e.key)];
       if (!target) return;
       e.preventDefault();
       setView(target.id);

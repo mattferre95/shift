@@ -1,7 +1,7 @@
 import { useShift } from "@/state/shift";
 import { isAnimationFormat, isAudioFormat, type OutputFormat } from "@/types";
 
-export function SoundControl() {
+export function SoundControl({ dashboard = false }: { dashboard?: boolean }) {
   const s = useShift();
   return <SoundControlView
     sourceMoves={s.sourceMoves}
@@ -10,6 +10,7 @@ export function SoundControl() {
     hasAudio={s.localMedia?.hasAudio ?? s.playback.info?.hasAudio ?? null}
     soundEnabled={s.soundEnabled}
     toggleSound={s.toggleSound}
+    dashboard={dashboard}
   />;
 }
 
@@ -20,6 +21,7 @@ export function SoundControlView({
   hasAudio,
   soundEnabled,
   toggleSound,
+  dashboard = false,
 }: {
   sourceMoves: boolean;
   isImage: boolean;
@@ -27,6 +29,7 @@ export function SoundControlView({
   hasAudio: boolean | null;
   soundEnabled: boolean;
   toggleSound: () => void;
+  dashboard?: boolean;
 }) {
   const applies = sourceMoves && !isImage && !isAudioFormat(format) && !isAnimationFormat(format);
   if (!applies || hasAudio == null) return null;
@@ -39,7 +42,7 @@ export function SoundControlView({
       </svg>
       {hasAudio ? (
         <>
-          <span className={soundEnabled ? "text-shift-text" : "text-shift-dim"}>{soundEnabled ? "Sound" : "Muted"}</span>
+          <span className={soundEnabled ? "text-shift-text" : "text-shift-dim"}>{dashboard ? (soundEnabled ? "SOUND ON" : "SOUND OFF") : (soundEnabled ? "Sound" : "Muted")}</span>
           <button
             type="button"
             aria-pressed={soundEnabled}
@@ -61,7 +64,7 @@ export function SoundControlView({
           </button>
         </>
       ) : (
-        <span className="pr-[6px] text-shift-soft">No audio</span>
+        <span className="pr-[6px] text-shift-soft">{dashboard ? "NO AUDIO" : "No audio"}</span>
       )}
     </div>
   );

@@ -59,6 +59,12 @@ export function usePlayback(
     status: null,
     timings: {},
   });
+  useEffect(() => {
+    if (import.meta.env.DEV && import.meta.env.MODE !== "test" && state.status === "ready") {
+      // Stage durations are native elapsed times; no URLs or media paths are logged.
+      console.debug("[SHIFT timing] preview", state.timings);
+    }
+  }, [state.status, state.timings]);
 
   useEffect(() => {
     const current = ++generation.current;

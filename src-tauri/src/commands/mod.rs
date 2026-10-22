@@ -52,10 +52,25 @@ pub struct LocalMedia {
     pub has_alpha: bool,
 }
 
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AnalysisEvent {
+    request_id: String,
+    stage: &'static str,
+    elapsed_ms: u64,
+}
+
 #[tauri::command]
-pub async fn analyze_url(url: String, browser_session: BrowserSessionMode) -> Result<UrlMedia> {
+pub async fn analyze_url(app: AppHandle, url: String, browser_session: BrowserSessionMode, request_id: Option<String>) -> Result<UrlMedia> {
     tauri::async_runtime::spawn_blocking(move || {
+        let started = Instant::now();
         let parsed = validation::resolve_public_url(&validation::validate_url(&url)?)?;
+        if let Some(id) = &request_id {
+            let _ = app.emit("shift://analysis", AnalysisEvent {
+                request_id: id.clone(), stage: "fetchingMediaInformation",
+                elapsed_ms: started.elapsed().as_millis().min(u64::MAX as u128) as u64,
+            });
+        }
         let provider = providers::for_url_with_session(&parsed, browser_session)
             .ok_or_else(|| ShiftError::new("no_provider", "SHIFT can't handle this link."))?;
         let cache = std::env::temp_dir()

@@ -13,6 +13,7 @@ import { ImageBatchView } from "@/features/input/ImageBatchView";
 import { CompleteState } from "@/features/export/CompleteState";
 import { ErrorState } from "@/features/export/ErrorState";
 import { ProcessingState } from "@/features/jobs/ProcessingState";
+import { DashboardView } from "@/features/dashboard/DashboardView";
 import { ShiftProvider, useShift } from "@/state/shift";
 import { VIEWS, ViewProvider, useView, type View } from "@/state/view";
 
@@ -46,7 +47,7 @@ function Window() {
   // failed to open never became one.
   const jobSource = jobScreen && (!!localMedia || !!urlMedia) && !(screen === "error" && failedDuring.current === "input");
 
-  const header = jobSource
+  const header = !jobScreen && view === "dashboard" ? null : jobSource
     ? post ? <PostHeader /> : <EditHeader sound={false} />
     : loaded && view === "download" && post && !analyzing
       ? <PostHeader />
@@ -56,7 +57,7 @@ function Window() {
 
   // Modes and the post view use the full workspace; Download and the job
   // screens are a centred column, so a wider window adds margin, not width.
-  const fullWidth = loaded && (view !== "download" || (post && !analyzing));
+  const fullWidth = view === "dashboard" || screen === "batch" || (loaded && (view !== "download" || (post && !analyzing)));
 
   return (
     <div className="flex h-full bg-shift-window">
@@ -65,9 +66,9 @@ function Window() {
         {header}
         <main className="relative min-h-0 flex-1 overflow-hidden">
           <div className={fullWidth ? "relative h-full w-full" : "relative mx-auto h-full w-full max-w-[920px]"}>
-            {screen === "empty" && <Home />}
+            {screen === "empty" && (view === "dashboard" ? <DashboardView /> : <Home />)}
             {loaded && <ModeView view={view} />}
-            {screen === "batch" && <ImageBatchView />}
+            {screen === "batch" && (view === "dashboard" ? <DashboardView /> : <ImageBatchView />)}
             {screen === "processing" && <ProcessingState />}
             {screen === "complete" && <CompleteState />}
             {screen === "error" && <ErrorState during={failedDuring.current} />}
@@ -86,6 +87,8 @@ function Window() {
 /** One view over the open source; every one of them shares the same export. */
 function ModeView({ view }: { view: View }) {
   switch (view) {
+    case "dashboard":
+      return <DashboardView />;
     case "download":
       return <SourceResult />;
     case "convert":
@@ -109,6 +112,9 @@ function useDesktopBehaviour() {
   // Native file drops carry real paths; the webview's own drop event does not.
   useEffect(() => {
     let unlisten: (() => void) | undefined;
+    // Browser-based layout previews have no Tauri bridge. Native drops are
+    // registered only by the actual desktop runtime.
+    if (!("__TAURI_INTERNALS__" in window)) return;
     getCurrentWebview()
       .onDragDropEvent((event) => {
         if (event.payload.type === "over") s.setDragging(true);
