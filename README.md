@@ -23,13 +23,15 @@ Drop a file or paste a link. SHIFT works out what it is and shows only the
 outputs that make sense for it — a photo never offers you a bitrate, an audio
 file never offers you a resolution.
 
-For a single source, one export and a few focused views of it in the sidebar:
-**Download**, **Convert**, **Edit**, **Resize** and **Compress**. A trim set in
-Edit and a crop set in Resize both land in the same file; each view only shows
-up when it applies to what you opened.
+Everything lives on one **Dashboard**: the source, an immediate trim timeline
+with first-frame preview and duration presets, the output format and its
+settings, Sound on/off, Flip, aspect and size, and a single export bar. The
+sidebar still has **Download**, **Convert**, **Edit**, **Resize** and
+**Compress** as focused views of the same settings; a trim set in Edit and a
+crop set in Resize both land in the same file, and each view only shows up when
+it applies to what you opened.
 
-The most common one-click changes — **Sound** and **Flip** — also sit as
-**Quick actions** on the first screen after a source loads; they are the same
+**Sound** and **Flip** are quick actions on the Dashboard; they are the same
 settings Edit and Resize show, not copies of them. **New Shift** (⌘N) clears
 the source and every setting and starts over.
 
@@ -147,6 +149,9 @@ npm run app:build
 required before the first build.
 
 The result is `src-tauri/target/release/bundle/macos/SHIFT.app`.
+
+App icons are generated from the 1024px master in `src/assets/brand/` with
+`npm run icons` (macOS only).
 
 ```bash
 npm run app:dev                 # development
