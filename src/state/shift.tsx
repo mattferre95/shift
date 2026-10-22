@@ -103,6 +103,8 @@ interface ShiftState {
   clipIn: string;
   clipOut: string;
   clipDurationPreset: TrimDurationPreset;
+  /** True once the user has edited IN/OUT, so late metadata never overwrites it. */
+  clipTouched: boolean;
   clipError: string | null;
   clipLabel: string | null;
   /** Length of the current IN/OUT range, so the loop cap can be enforced. */
@@ -224,8 +226,9 @@ const initial: ShiftState = {
   soundEnabled: true,
   clipEnabled: false,
   clipIn: "00:00.000",
-  clipOut: "00:15.000",
-  clipDurationPreset: 15,
+  clipOut: "00:00.000",
+  clipDurationPreset: "custom",
+  clipTouched: false,
   clipError: null,
   clipLabel: null,
   clipSeconds: null,
@@ -431,6 +434,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
               clipIn: sameSource ? prev.clipIn : formatTimestamp(trim.start),
               clipOut: sameSource ? prev.clipOut : formatTimestamp(trim.end),
               clipDurationPreset: sameSource ? prev.clipDurationPreset : trim.preset,
+              clipTouched: sameSource ? prev.clipTouched : false,
               clipError: null,
               clipLabel: null,
               clipSeconds: null,
@@ -481,6 +485,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
             clipIn: formatTimestamp(trim.start),
             clipOut: formatTimestamp(trim.end),
             clipDurationPreset: trim.preset,
+            clipTouched: false,
             clipError: null,
             clipLabel: null,
             clipSeconds: null,
@@ -725,6 +730,17 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
       };
     });
   }, [s.clipEnabled, duration]);
+
+  // An untouched selection is the whole source, so it follows the duration as
+  // better metadata arrives (provider estimate, then the player's measurement).
+  useEffect(() => {
+    if (s.clipTouched || duration == null || duration <= 0) return;
+    set((prev) => {
+      const range = defaultTrimRange(duration);
+      if (prev.clipTouched || prev.clipIn === formatTimestamp(range.start) && prev.clipOut === formatTimestamp(range.end)) return prev;
+      return { ...prev, ...trimFields(range) };
+    });
+  }, [s.clipTouched, duration]);
 
   useEffect(() => {
     if (!s.clipEnabled) {
@@ -1161,6 +1177,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
           soundEnabled: true,
           clipEnabled: false,
           ...trimFields(trim),
+          clipTouched: false,
           aspect: ASPECT_DEFAULT,
           flip: FLIP_NONE,
           previewSource: null,
@@ -1185,15 +1202,17 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
       set((prev) => duration == null || duration <= 0 ? prev : ({
         ...prev,
         clipEnabled: true,
+        clipTouched: true,
         ...trimFields(applyTrimPreset(trimRangeFrom(prev, duration), preset, duration)),
       })),
     setClipIn: (v) =>
       set((prev) => {
         const seconds = parseTimestamp(v);
-        if (seconds == null) return { ...prev, clipIn: v };
+        if (seconds == null) return { ...prev, clipIn: v, clipTouched: true };
         const range = moveTrimStart(trimRangeFrom(prev, duration), seconds, duration);
         return {
           ...prev,
+          clipTouched: true,
           ...trimFields(range),
           clipIn: Math.abs(range.start - seconds) < 0.0005 ? v : formatTimestamp(range.start),
         };
@@ -1201,10 +1220,11 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
     setClipOut: (v) =>
       set((prev) => {
         const seconds = parseTimestamp(v);
-        if (seconds == null) return { ...prev, clipOut: v };
+        if (seconds == null) return { ...prev, clipOut: v, clipTouched: true };
         const range = resizeTrimEnd(trimRangeFrom(prev, duration), seconds, duration);
         return {
           ...prev,
+          clipTouched: true,
           ...trimFields(range),
           clipOut: Math.abs(range.end - seconds) < 0.0005 ? v : formatTimestamp(range.end),
         };
@@ -1212,16 +1232,19 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
     resizeClipIn: (seconds) =>
       set((prev) => ({
         ...prev,
+        clipTouched: true,
         ...trimFields(resizeTrimStart(trimRangeFrom(prev, duration), seconds, duration)),
       })),
     resizeClipOut: (seconds) =>
       set((prev) => ({
         ...prev,
+        clipTouched: true,
         ...trimFields(resizeTrimEnd(trimRangeFrom(prev, duration), seconds, duration)),
       })),
     moveClipRange: (start) =>
       set((prev) => ({
         ...prev,
+        clipTouched: true,
         ...trimFields(moveTrimRange(trimRangeFrom(prev, duration), start, duration)),
       })),
     startExport: () => {

@@ -81,7 +81,7 @@ it("sidebar New Shift clears a local source, trim, framing, and returns navigati
   await waitFor(() => expect(view.view).toBe("dashboard"));
   expect(shift).toMatchObject({
     screen: "empty", localMedia: null, urlMedia: null, previewSource: null,
-    clipEnabled: false, clipIn: "00:00.000", clipOut: "00:15.000", clipDurationPreset: 15,
+    clipEnabled: false, clipIn: "00:00.000", clipOut: "00:00.000", clipDurationPreset: "custom",
     aspect: { ratio: "original", frame: "fill", width: null, height: null, crop: null },
     format: "MP4", job: null, output: null, error: null,
   });

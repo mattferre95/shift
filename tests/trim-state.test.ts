@@ -17,9 +17,10 @@ const range = (start: number, end: number, preset: TrimRange["preset"] = 15): Tr
 });
 
 describe("trim range", () => {
-  test("a new source starts with the 15 second preset", () => {
-    expect(defaultTrimRange(120)).toEqual(range(0, 15));
-    expect(defaultTrimRange(8)).toEqual(range(0, 8));
+  test("a new source selects its whole duration, and never invents one", () => {
+    expect(defaultTrimRange(34.538)).toEqual(range(0, 34.538, "custom"));
+    expect(defaultTrimRange(8)).toEqual(range(0, 8, "custom"));
+    expect(defaultTrimRange(null)).toEqual(range(0, 0, "custom"));
   });
 
   test("moving IN moves OUT with the active preset", () => {

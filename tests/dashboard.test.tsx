@@ -11,7 +11,8 @@ import type { LocalMedia, UrlMedia } from "@/types";
 vi.mock("@tauri-apps/api/core", () => ({ convertFileSrc: (path: string) => path }));
 vi.mock("@/components/BuildInfo", () => ({ BuildInfo: () => <footer aria-label="Build information">SHIFT v1.3.1</footer> }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ save: vi.fn(async () => "/tmp/out.mp4"), open: vi.fn(async () => null) }));
-vi.mock("@/state/playback", () => ({ usePlayback: (input: { kind: string; path?: string } | null) => ({ info: { path: "/tmp/preview.mp4", duration: input?.path?.includes("short") ? 8 : 80, hasVideo: true, hasAudio: true, width: 1920, height: 1080, proxy: false }, busy: false, error: null, status: "ready", cancel: vi.fn(), retry: vi.fn(), fallback: vi.fn(), markReady: vi.fn() }) }));
+const pb = vi.hoisted(() => ({ duration: null as number | null, unknown: false }));
+vi.mock("@/state/playback", () => ({ usePlayback: (input: { kind: string; path?: string } | null) => ({ info: pb.unknown ? null : { path: "/tmp/preview.mp4", duration: pb.duration ?? (input?.path?.includes("short") ? 8 : 80), hasVideo: true, hasAudio: true, width: 1920, height: 1080, proxy: false }, busy: false, error: null, status: "ready", cancel: vi.fn(), retry: vi.fn(), fallback: vi.fn(), markReady: vi.fn() }) }));
 vi.mock("@/lib/ipc", () => ({
   defaultOutputDir: vi.fn(async () => "/tmp"), health: vi.fn(async () => ({ ffmpeg: true, ffprobe: true, ytdlp: true })), onJobEvent: vi.fn(async () => () => {}), onAnalysisEvent: vi.fn(async () => () => {}),
   analyzeFile: vi.fn(), analyzeUrl: vi.fn(), previewSource: vi.fn(async () => "data:image/png;base64,preview"), aspectPreview: vi.fn(async () => null), validateClip: vi.fn(async () => ({ seconds: 10, label: "00:10.000" })),
@@ -33,7 +34,7 @@ function Probe() { shift = useShift(); view = useView(); return null; }
 function mount() { return render(<AppWithProbe />); }
 function AppWithProbe() { return <App />; }
 
-beforeEach(() => { vi.clearAllMocks(); vi.mocked(ipc.analyzeFile).mockImplementation(async (path) => media(path)); });
+beforeEach(() => { pb.duration = null; pb.unknown = false; vi.clearAllMocks(); vi.mocked(ipc.analyzeFile).mockImplementation(async (path) => media(path)); });
 afterEach(cleanup);
 
 test("Dashboard is the empty default with URL and local entry", () => {
@@ -238,4 +239,72 @@ test("image batch and social collection paginate without mounting every item", a
   fireEvent.click(screen.getByRole("button", { name: "2. item-1.jpg" }));
   expect(within(inspector).getByText("item-1.jpg")).toBeTruthy();
   expect(within(inspector).getByText("image · 640 × 480")).toBeTruthy();
+});
+
+const video = (duration: number | null): UrlMedia => ({ ...post, url: `https://example.com/v/${duration}`, mediaItems: [{ ...post.mediaItems[0], type: "video", duration, qualities: [] }] });
+async function mountDashboard() {
+  const { ShiftProvider } = await import("@/state/shift"); const { ViewProvider } = await import("@/state/view"); const { DashboardView } = await import("@/features/dashboard/DashboardView");
+  render(<ShiftProvider><ViewProvider><Probe /><DashboardView /></ViewProvider></ShiftProvider>);
+}
+
+test("a local video selects its whole duration, Trim off, and enabling Trim keeps it", async () => {
+  await mountDashboard();
+  pb.duration = 34.538;
+  vi.mocked(ipc.analyzeFile).mockImplementation(async (path) => ({ ...media(path), duration: 34.538 }));
+  act(() => shift.acceptPaths(["/tmp/video.mp4"]));
+  await waitFor(() => expect(shift.screen).toBe("local"));
+  expect([shift.clipIn, shift.clipOut, shift.clipDurationPreset, shift.clipEnabled]).toEqual(["00:00.000", "00:34.538", "custom", false]);
+  expect((screen.getByLabelText("OUT", { selector: "input" }) as HTMLInputElement).value).toBe("00:34.538");
+  fireEvent.click(screen.getByRole("switch", { name: "Trim" }));
+  expect([shift.clipIn, shift.clipOut, shift.clipEnabled]).toEqual(["00:00.000", "00:34.538", true]);
+  fireEvent.click(screen.getByRole("button", { name: "10s" }));
+  expect([shift.clipOut, shift.clipDurationPreset]).toEqual(["00:10.000", 10]);
+});
+
+test("a URL video selects its whole duration", async () => {
+  await mountDashboard();
+  pb.duration = 34.538;
+  vi.mocked(ipc.analyzeUrl).mockResolvedValue(video(34.538));
+  act(() => shift.submitUrl("https://example.com/v/34.538"));
+  await waitFor(() => expect(shift.screen).toBe("url"));
+  expect([shift.clipIn, shift.clipOut, shift.clipDurationPreset, shift.clipEnabled]).toEqual(["00:00.000", "00:34.538", "custom", false]);
+});
+
+test("late metadata fills an untouched range but never overwrites an edited one", async () => {
+  await mountDashboard();
+  pb.unknown = true;
+  vi.mocked(ipc.analyzeUrl).mockResolvedValue(video(null));
+  act(() => shift.submitUrl("https://example.com/v/null"));
+  await waitFor(() => expect(shift.screen).toBe("url"));
+  expect(shift.duration).toBeNull();
+  expect(shift.clipOut).toBe("00:00.000"); // no invented duration
+
+  pb.unknown = false; pb.duration = 34.5;
+  act(() => shift.setQuality("best"));
+  await waitFor(() => expect(shift.clipOut).toBe("00:34.500"));
+  pb.duration = 34.538; // the player measures the exact file
+  act(() => shift.setQuality("best2"));
+  await waitFor(() => expect(shift.clipOut).toBe("00:34.538"));
+
+  act(() => shift.setClipOut("00:10.000"));
+  pb.duration = 40;
+  act(() => shift.setQuality("best3"));
+  await waitFor(() => expect(shift.duration).toBe(40));
+  expect([shift.clipIn, shift.clipOut]).toEqual(["00:00.000", "00:10.000"]);
+  act(() => shift.setFormat("WEBM")); act(() => view.setView("edit"));
+  expect([shift.clipIn, shift.clipOut]).toEqual(["00:00.000", "00:10.000"]);
+});
+
+test("a different video, and New Shift, start from a fresh full range", async () => {
+  await mountDashboard();
+  act(() => shift.acceptPaths(["/tmp/video.mp4"]));
+  await waitFor(() => expect(shift.screen).toBe("local"));
+  act(() => shift.setClipOut("00:10.000"));
+  expect(shift.clipOut).toBe("00:10.000");
+  act(() => shift.acceptPaths(["/tmp/short.mp4"]));
+  await waitFor(() => expect(shift.localMedia?.path).toBe("/tmp/short.mp4"));
+  expect([shift.clipIn, shift.clipOut]).toEqual(["00:00.000", "00:08.000"]);
+  pb.unknown = true; // no source, so no playback metadata either
+  act(() => shift.reset());
+  expect([shift.clipIn, shift.clipOut, shift.clipDurationPreset]).toEqual(["00:00.000", "00:00.000", "custom"]);
 });

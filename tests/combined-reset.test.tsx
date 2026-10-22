@@ -81,7 +81,7 @@ it("New Shift clears the Chrome session together with flip, sound, framing and t
   expect(shift.flip).toEqual({ horizontal: false, vertical: false });
   expect(shift.aspect).toEqual(ASPECT_DEFAULT);
   expect(shift.clipEnabled).toBe(false);
-  expect([shift.clipIn, shift.clipOut]).toEqual(["00:00.000", "00:15.000"]);
+  expect([shift.clipIn, shift.clipOut]).toEqual(["00:00.000", "00:30.000"]);
   expect(shift.soundEnabled).toBe(true);
   expect(shift.urlMedia).toBeNull();
   expect(shift.error).toBeNull();

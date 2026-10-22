@@ -1,6 +1,5 @@
 export type TrimDurationPreset = 10 | 15 | 30 | 60 | "custom";
 
-export const DEFAULT_TRIM_DURATION: TrimDurationPreset = 15;
 export const TRIM_DURATION_PRESETS: { id: TrimDurationPreset; label: string }[] = [
   { id: 10, label: "10s" },
   { id: 15, label: "15s" },
@@ -21,8 +20,9 @@ const clamp = (value: number, min: number, max: number) =>
 const mediaEnd = (duration: number | null) =>
   duration != null && duration >= 0 ? duration : Number.POSITIVE_INFINITY;
 
+/** A new source selects all of itself; with no measured duration, nothing is invented. */
 export function defaultTrimRange(duration: number | null): TrimRange {
-  return applyTrimPreset({ start: 0, end: 0, preset: DEFAULT_TRIM_DURATION }, DEFAULT_TRIM_DURATION, duration);
+  return { start: 0, end: duration != null && duration > 0 ? duration : 0, preset: "custom" };
 }
 
 /** Reconcile provider metadata with the exact duration measured by playback. */
