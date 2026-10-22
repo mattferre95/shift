@@ -275,7 +275,7 @@ byte for byte by the test itself, because FFmpeg's GIF muxer snapped the delays
 it was asked for onto its own grid.
 
 **An odd-sized source is cropped even, not scaled.** yuv420p subsamples chroma
-by two and libx264 refuses odd dimensions outright — a 201x151 GIF produced no
+by two and the H.264 encoder refuses odd dimensions outright — a 201x151 GIF produced no
 file. Dropping the stray column or row resamples nothing and keeps pixels
 square.
 
@@ -319,38 +319,22 @@ CSP only in `tauri.conf.json`.**
 
 ## Sidecars
 
-`scripts/fetch-sidecars.sh` downloads all three into `src-tauri/binaries/`.
+`scripts/fetch-sidecars.sh` prepares three executables under `src-tauri/binaries/`.
 They are not committed.
 
-- **ffmpeg / ffprobe** — static arm64 builds, shipped as Tauri `externalBin`,
-  landing in `Contents/MacOS/`.
-- **yt-dlp** — the **directory** build (`yt-dlp_macos.zip`), shipped as a bundle
-  resource in `Contents/Resources/ytdlp/`. The single-file build costs ~11
-  seconds *per invocation* on macOS (it unpacks itself every launch); the
-  directory build starts in ~0.35s after a one-time warm-up. That was the
-  difference between a 40-second analysis and an 8-second one.
+- **ffmpeg / ffprobe** — pinned LGPL arm64 builds with shared FFmpeg libraries, shipped as Tauri `externalBin` in `Contents/MacOS/`. The separate libraries are resources under `Contents/Resources/ffmpeg-lib/`; notices and build information are under `Contents/Resources/licenses/`. `scripts/build-ffmpeg-lgpl.sh` prepares the matching source archive for publication.
+- **yt-dlp** — the **directory** build (`yt-dlp_macos.zip`), shipped as a bundle resource in `Contents/Resources/ytdlp/`. The single-file build unpacked itself on each launch, so the directory build avoids that startup delay.
 
 `process::resolve` looks in `Contents/MacOS`, then `Contents/Resources`, then
-the dev checkout, then `PATH`. A packaged build never reaches the `PATH` arm;
-it exists so a development machine works before sidecars are fetched.
+the dev checkout, then `PATH`. A packaged build uses its bundled sidecars.
 
 ## Packaging
 
-`npm run tauri build` produces `SHIFT.app` and a DMG. The app is ~254 MB,
-almost entirely sidecars (ffmpeg and ffprobe are ~63 MB each, yt-dlp ~124 MB).
-
-Still open before public distribution:
-
-- **Codesigning and notarization.** The build is currently ad-hoc signed.
-  Distribution needs a Developer ID identity, `--options runtime`, and
-  notarization of the app *and* every bundled binary.
-- **FFmpeg licensing.** The bundled builds include libx264 and libvpx and are
-  therefore **GPL**. Shipping SHIFT commercially requires either complying with
-  the GPL or rebuilding FFmpeg as LGPL without those encoders (which would
-  remove H.264 and VP9 output). Decide before any public release.
-- **yt-dlp updates.** Sources change often. `scripts/fetch-sidecars.sh` pulls
-  the latest release; re-running it and rebuilding is the update path. No
-  auto-updater — it is not needed yet.
+`npm run app:build` produces `SHIFT.app` and a DMG. The Apple Silicon package
+requires macOS 12 or newer. See [third-party notices](THIRD_PARTY_NOTICES.md)
+for the LGPL source and notice obligations. A local ad hoc signature is only
+suitable for testing. Public distribution needs Developer ID signing and
+notarization of the final package.
 
 ## Future work
 

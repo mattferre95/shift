@@ -23,7 +23,7 @@ SHIFT brings source, preview, timeline, output format and export into one Dashbo
 
 ## Screenshots
 
-All images below were captured from the running v1.4.0 production app using locally generated demo media. They show actual controls and output, with the macOS screen-recording badge cropped out.
+All images below were captured from a running v1.4.0 review build using locally generated demo media. They show actual controls and output, with the macOS screen-recording badge cropped out.
 
 | Focused editor | Portrait reframing |
 | --- | --- |
@@ -37,13 +37,13 @@ All images below were captured from the running v1.4.0 production app using loca
 
 ## Downloads
 
-A v1.4.0 Apple Silicon DMG has been built and tested locally. **There is no public binary download yet.** The bundled FFmpeg build is GPLv3-or-later, and its complete corresponding-source distribution has not been prepared; this is a [public distribution gate](docs/THIRD_PARTY_NOTICES.md#public-distribution-gate). The app also has no Developer ID signature or notarization. A download button will be added only when a verified GitHub Release asset is live.
+An Apple Silicon release candidate is being validated. **There is no public binary download yet.** The package uses an LGPL FFmpeg build and must be published with its corresponding-source archive. Developer ID signing and notarization remain open. A download link will be added only after both assets are verified on GitHub Releases.
 
 Check [GitHub Releases](https://github.com/mattferre95/shift/releases) for published builds. The current local test package is intended for release validation, not public redistribution.
 
 ## Build locally
 
-Requires an Apple Silicon Mac, macOS 11 or newer, Node.js, Rust and Xcode Command Line Tools.
+Requires an Apple Silicon Mac with macOS 12 or newer, Node.js, Rust, Xcode Command Line Tools, CMake, pkg-config, Meson and Ninja.
 
 ```bash
 npm ci
@@ -51,7 +51,7 @@ npm run sidecars
 npm run app:build
 ```
 
-The sidecar script downloads the pinned FFmpeg 9.0.1 and yt-dlp 2026.08.19 builds, verifies their archives, and stores them outside Git. Tauri writes the app and DMG under `src-tauri/target/release/bundle/`. The local build is not notarized, so macOS may warn or block it; it is not equivalent to a Developer ID release.
+The sidecar script builds the pinned LGPL FFmpeg 9.0.1 variant with WebP support from verified source archives and downloads the pinned yt-dlp 2026.08.19 directory build. It writes the FFmpeg corresponding-source archive beside the binary archive under `src-tauri/target/ffmpeg-lgpl-build/out/`. Sidecars and shared libraries stay outside Git. Tauri writes the app and DMG under `src-tauri/target/release/bundle/`. A local ad hoc signed build is not notarized and is not equivalent to a public Developer ID release.
 
 ```bash
 npm run app:dev               # development app
@@ -59,11 +59,11 @@ npm test                      # frontend tests
 cd src-tauri && cargo test    # Rust tests; live network cases are ignored
 ```
 
-For build or playback problems, verify the three sidecars are present in `src-tauri/binaries/`, then review [architecture and packaging notes](docs/ARCHITECTURE.md). There is no automatic updater or support commitment.
+For build or playback problems, verify the sidecars and `ffmpeg-lib/` are present in `src-tauri/binaries/`, then review [architecture and packaging notes](docs/ARCHITECTURE.md). There is no automatic updater or support commitment.
 
 ## Credits and license
 
-SHIFT application source: Copyright © 2026 Matt Ferre, [MIT License](LICENSE). The macOS bundle also contains [FFmpeg and ffprobe](https://ffmpeg.org/) and [yt-dlp](https://github.com/yt-dlp/yt-dlp), each under its own license. Exact versions, upstream archives, notices and the open source-distribution requirement are in [Third-party software and distribution status](docs/THIRD_PARTY_NOTICES.md). The bundled yt-dlp directory retains its packaged dependency notices.
+SHIFT application source: Copyright © 2026 Matt Ferre, [MIT License](LICENSE). The macOS bundle also contains [FFmpeg and ffprobe](https://ffmpeg.org/) and [yt-dlp](https://github.com/yt-dlp/yt-dlp), each under its own license. Exact versions, source material, notices and the public distribution requirements are in [Third-party software and distribution status](docs/THIRD_PARTY_NOTICES.md). The bundled yt-dlp directory retains its packaged dependency notices.
 
 Built with Tauri 2, React, TypeScript and Rust. See the [architecture](docs/ARCHITECTURE.md), [QA checklist](docs/QA_CHECKLIST.md) and [design notes](docs/DESIGN_SPEC.md) for development details.
 
