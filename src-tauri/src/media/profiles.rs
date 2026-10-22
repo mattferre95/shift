@@ -310,7 +310,7 @@ fn gif_timing(clip: Option<ClipRange>) -> Vec<String> {
     f
 }
 
-/// yuv420p subsamples chroma by two, and libx264 refuses an odd width or height
+/// yuv420p subsamples chroma by two, and the H.264 encoder refuses an odd width or height
 /// outright — a 201x151 GIF produced no file at all. Cropping the stray column
 /// or row resamples nothing and keeps the pixels square; a scale would do
 /// neither.
@@ -766,11 +766,11 @@ fn video_encoder(format: OutputFormat) -> Vec<String> {
         ],
         _ => vec![
             "-c:v".into(),
-            "libx264".into(),
-            "-crf".into(),
-            "20".into(),
-            "-preset".into(),
-            "medium".into(),
+            "h264_videotoolbox".into(),
+            "-q:v".into(),
+            "65".into(),
+            "-allow_sw".into(),
+            "1".into(),
             "-pix_fmt".into(),
             "yuv420p".into(),
         ],
@@ -1397,7 +1397,7 @@ pub fn playback_plan(input: &Path, probe: &MediaProbe, output: &Path) -> EncodeP
             vf.push_str(&format!(",fps={GIF_TICKS_PER_SECOND}"));
         }
         args.extend(["-map".into(), "0:V:0".into(), "-map".into(), "0:a:0?".into(), "-vf".into(), vf]);
-        args.extend(["-c:v", "libx264", "-preset", "veryfast", "-crf", "25", "-pix_fmt", "yuv420p"].into_iter().map(String::from));
+        args.extend(["-c:v", "h264_videotoolbox", "-q:v", "50", "-allow_sw", "1", "-pix_fmt", "yuv420p"].into_iter().map(String::from));
     } else {
         args.extend(["-vn", "-map", "0:a:0"].into_iter().map(String::from));
     }

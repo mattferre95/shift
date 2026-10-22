@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 
 /// Smallest freeform edge worth producing.
 pub const MIN_DIMENSION: u32 = 16;
-/// Largest freeform edge. Well inside what libx264 and libaom will accept, and
+/// Largest freeform edge. Well inside what the video encoders will accept, and
 /// far past anything an everyday export needs.
 pub const MAX_DIMENSION: u32 = 8192;
 

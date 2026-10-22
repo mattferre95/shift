@@ -1,0 +1,107 @@
+diff --git a/scripts/build-deps.sh b/scripts/build-deps.sh
+index 9ecfbd7..048c3f2 100755
+--- a/scripts/build-deps.sh
++++ b/scripts/build-deps.sh
+@@ -30,6 +30,7 @@ license_files() {
+     lame) echo "COPYING LICENSE" ;;
+     opus | dav1d | x264 | x265) echo "COPYING" ;;
+     libvpx | libaom) echo "LICENSE PATENTS" ;;
++    libwebp) echo "COPYING PATENTS" ;;
+     *) die "no license files known for $1" ;;
+   esac
+ }
+@@ -137,6 +138,18 @@ build_libaom() {
+   cmake --install ../cmake-build-aom
+ }
+ 
++build_libwebp() {
++  BUILD_TAG=libwebp cmake_configure "$PWD" \
++    -DBUILD_SHARED_LIBS=OFF -DWEBP_LINK_STATIC=ON \
++    -DWEBP_BUILD_ANIM_UTILS=OFF -DWEBP_BUILD_CWEBP=OFF \
++    -DWEBP_BUILD_DWEBP=OFF -DWEBP_BUILD_GIF2WEBP=OFF \
++    -DWEBP_BUILD_IMG2WEBP=OFF -DWEBP_BUILD_VWEBP=OFF \
++    -DWEBP_BUILD_WEBPINFO=OFF -DWEBP_BUILD_WEBPMUX=OFF \
++    -DWEBP_BUILD_EXTRAS=OFF -DWEBP_BUILD_LIBWEBPMUX=ON
++  cmake --build ../cmake-build-libwebp -j "$JOBS"
++  cmake --install ../cmake-build-libwebp
++}
++
+ build_x264() {
+   # x264 builds 8-bit and 10-bit support into one library (--bit-depth=all).
+   CC="$CC_BIN" ./configure --prefix="$PREFIX" --host="$HOST_TRIPLE" \
+diff --git a/scripts/build-ffmpeg.sh b/scripts/build-ffmpeg.sh
+index 44bc2a8..99451aa 100755
+--- a/scripts/build-ffmpeg.sh
++++ b/scripts/build-ffmpeg.sh
+@@ -48,7 +48,7 @@ configure_args=(
+   --sysroot="$SDKROOT"
+   --extra-cflags="-mmacosx-version-min=$MACOS_DEPLOYMENT_TARGET$dep_cflags"
+   --extra-ldflags="-mmacosx-version-min=$MACOS_DEPLOYMENT_TARGET$dep_ldflags"
+-  --extra-ldexeflags=-Wl,-rpath,@executable_path/../lib
++  --extra-ldexeflags="-Wl,-rpath,@executable_path/../lib -Wl,-rpath,@executable_path/ffmpeg-lib -Wl,-rpath,@executable_path/../Resources/ffmpeg-lib -Wl,-headerpad_max_install_names"
+   --extra-ldsoflags=-Wl,-rpath,@loader_path
+   --install-name-dir=@rpath
+   --pkg-config=pkg-config
+@@ -74,6 +74,7 @@ configure_args=(
+   --enable-libmp3lame
+   --enable-libopus
+   --enable-libvpx
++  --enable-libwebp
+ )
+ if [ "$CROSS_COMPILING" = 1 ]; then
+   configure_args+=(--enable-cross-compile --host-cc="$CC_BIN")
+@@ -165,10 +166,11 @@ work of the Independent JPEG Group.
+ VideoToolbox, AudioToolbox, zlib, bzip2 and libiconv are system components of macOS: they are
+ linked, not included.
+ 
+-The exact source code of every component is published with the release this archive belongs to:
+-https://github.com/dfloresc/ffmpeg-macos-builds/releases/tag/$RELEASE_TAG
+-The build scripts are at https://github.com/dfloresc/ffmpeg-macos-builds (MIT License).
+-When you redistribute these binaries, include this LICENSES directory and point to those sources.
++When redistributed with SHIFT, the exact component sources, this build script and the
++SHIFT WebP patch are distributed in the matching GitHub Release asset named
++SHIFT-ffmpeg-9.0.1-lgpl-corresponding-source.tar.xz. The underlying build scripts
++come from https://github.com/dfloresc/ffmpeg-macos-builds (MIT License).
++Redistribute this LICENSES directory and the corresponding-source asset with the binary.
+ EOF
+ 
+ repo_commit="$(git -C "$ROOT_DIR" rev-parse HEAD 2>/dev/null || echo unknown)"
+@@ -196,7 +198,7 @@ fi
+   echo "          signed by the FFmpeg release key $FFMPEG_SIGNING_KEY_FINGERPRINT"
+   for c in $components; do source_line "$c"; done
+   [ "$variant" = lgpl ] || echo "  x264 is the stable branch at commit $X264_COMMIT"
+-  echo "Patches: none"
++  echo "Patches: SHIFT libwebp support patch (see SHIFT release source archive)"
+   echo
+   echo "FFmpeg configure line:"
+   printf "./configure"
+diff --git a/scripts/common.sh b/scripts/common.sh
+index de3707c..9520c5a 100755
+--- a/scripts/common.sh
++++ b/scripts/common.sh
+@@ -10,9 +10,9 @@ WORK_DIR="${WORK_DIR:-$ROOT_DIR/work}"
+ OUT_DIR="${OUT_DIR:-$ROOT_DIR/out}"
+ 
+ # Third-party libraries in build order. x264 and x265 are GPL: only the gpl variant gets them.
+-LGPL_COMPONENTS="lame opus dav1d libvpx libaom"
++LGPL_COMPONENTS="lame opus dav1d libvpx libaom libwebp"
+ GPL_COMPONENTS="$LGPL_COMPONENTS x264 x265"
+-ALL_COMPONENTS="ffmpeg $GPL_COMPONENTS"
++ALL_COMPONENTS="ffmpeg $LGPL_COMPONENTS"
+ 
+ log() { printf '\n==> %s\n' "$*" >&2; }
+ warn() { printf 'warning: %s\n' "$*" >&2; }
+diff --git a/versions.env b/versions.env
+index aaa88de..1989e0f 100644
+--- a/versions.env
++++ b/versions.env
+@@ -62,3 +62,9 @@ LAME_VERSION=4.0
+ LAME_URL=https://downloads.sourceforge.net/project/lame/lame/4.0/lame-4.0.tar.gz
+ LAME_SHA256=3df5124d5ad3a98312ffd7ba6a9b36230e4f8a3e66d3ce0f425e336c32d216eb
+ LAME_LICENSE=LGPL-2.0-or-later
++
++LIBWEBP_VERSION=1.6.0
++LIBWEBP_URL=https://github.com/webmproject/libwebp/archive/refs/tags/v1.6.0.tar.gz
++LIBWEBP_FILE=libwebp-1.6.0.tar.gz
++LIBWEBP_SHA256=93a852c2b3efafee3723efd4636de855b46f9fe1efddd607e1f42f60fc8f2136
++LIBWEBP_LICENSE=BSD-3-Clause
