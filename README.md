@@ -1,181 +1,70 @@
-<h1 align="center">SHIFT™</h1>
+<div align="center">
+  <img src="src/assets/brand/shift-text.png" alt="SHIFT wordmark" width="280">
+  <h1>SHIFT™</h1>
+  <p><strong>Anything in. Anything out.</strong></p>
+  <p>A local-first macOS workspace for trimming, reframing, converting and exporting video, audio, images and GIFs.</p>
+  <p><strong>v1.4.0 · Apple Silicon</strong></p>
+  <p><a href="#screenshots">View screenshots</a> · <a href="#build-locally">Build locally</a> · <a href="#downloads">Download status</a></p>
+</div>
 
 <p align="center">
-  <strong>Anything in. Anything out.</strong>
+  <img src="docs/screenshots/dashboard.png" alt="SHIFT v1.4.0 dashboard showing a real demo video, media preview, timeline and export controls" width="860">
 </p>
 
-<p align="center">
-  A local-first macOS media utility for downloading, trimming, converting,
-  resizing and exporting video, audio, images and GIFs.
-</p>
+SHIFT brings source, preview, timeline, output format and export into one Dashboard. Open a local file or paste a public media link, make the edits that apply to it, then export. **Download**, **Convert**, **Edit** and **Resize** remain focused views of the same settings.
 
-<p align="center">
-  <img src="docs/assets/shift-main.png" alt="SHIFT on macOS: trimming a clip in Edit, with the export settings beside it" width="860">
-</p>
+## Features
 
-## How it works
+- **Edit with context.** Preview video and audio, select an IN/OUT range on the timeline, use 10s, 15s, 30s and 1m presets, and keep the result in a single export workflow.
+- **Shape the output.** Change aspect ratio, position a crop, choose Fill or Fit, flip the picture, and keep or remove source sound. The preview and output dimensions show the result before export.
+- **Convert local media.** Work with common video, audio and image inputs; export MP4, MOV, WEBM, GIF, animated WEBP, MP3, M4A, WAV, FLAC, JPG, PNG, WEBP and AVIF where they apply. Local image batches can be converted together.
+- **Work with public links.** Analyze supported HTTP(S) media through yt-dlp and download or export available items. Site support can change. Only download media you are authorized or legally permitted to use.
+- **Stay local.** File transformations run on your Mac. SHIFT has no account, telemetry or cloud upload. Link analysis and downloads require network access; [URL egress limits](docs/URL_EGRESS.md) are documented separately.
 
-```
-Input → Detect → Shape it → Export
-```
+## Screenshots
 
-Drop a file or paste a link. SHIFT works out what it is and shows only the
-outputs that make sense for it — a photo never offers you a bitrate, an audio
-file never offers you a resolution.
+All images below were captured from the running v1.4.0 production app using locally generated demo media. They show actual controls and output, with the macOS screen-recording badge cropped out.
 
-Everything lives on one **Dashboard**: the source, an immediate trim timeline
-with first-frame preview and duration presets, the output format and its
-settings, Sound on/off, Flip, aspect and size, and a single export bar. The
-sidebar still has **Download**, **Convert**, **Edit**, **Resize** and
-**Compress** as focused views of the same settings; a trim set in Edit and a
-crop set in Resize both land in the same file, and each view only shows up when
-it applies to what you opened.
+| Focused editor | Portrait reframing |
+| --- | --- |
+| <img src="docs/screenshots/editor.png" alt="Edit view with video preview, ten-second trim and output choices" width="440"> | <img src="docs/screenshots/resize.png" alt="Resize view with a real 9:16 crop preview" width="440"> |
 
-**Sound** and **Flip** are quick actions on the Dashboard; they are the same
-settings Edit and Resize show, not copies of them. **New Shift** (⌘N) clears
-the source and every setting and starts over.
+| Timeline | Media preview |
+| --- | --- |
+| <img src="docs/screenshots/timeline.png" alt="Interactive IN and OUT timeline with ten-second preset" width="440"> | <img src="docs/screenshots/preview.png" alt="First-frame video preview of the license-free demo clip" width="440"> |
 
-## What it does
+[View the Convert screen](docs/screenshots/convert.png) or browse the [full screenshot gallery](docs/screenshots/).
 
-### URL and social media
+## Downloads
 
-- Paste public HTTP(S) links supported by yt-dlp, including direct media URLs
-  and video pages on compatible sites; individual sites can change
-- Download public video and image media from **X · Instagram · TikTok**, and
-  public LinkedIn videos, including supported `lnkd.in` short links
-- Keep multi-image and mixed-media posts in their original order
-- Pick which items of a carousel or mixed-media post to download; they are
-  saved as posted, together, into a folder you choose
-- Read the title, thumbnail, duration and source before committing to anything
-- Export **MP4**, **GIF**, **WEBP**, **MP3**, **M4A** or **WAV**
-- Optional **IN / OUT** clipping with millisecond precision
-- Quality selection where the source actually offers alternatives
-- When YouTube asks a public request for browser verification, an explicit
-  **Retry with Chrome** explains the macOS Chrome Safe Storage permission
-  prompt before using your local Chrome session for that link only. Ordinary
-  requests never read browser cookies, and SHIFT does not store them
+A v1.4.0 Apple Silicon DMG has been built and tested locally. **There is no public binary download yet.** The bundled FFmpeg build is GPLv3-or-later, and its complete corresponding-source distribution has not been prepared; this is a [public distribution gate](docs/THIRD_PARTY_NOTICES.md#public-distribution-gate). The app also has no Developer ID signature or notarization. A download button will be added only when a verified GitHub Release asset is live.
 
-### Local video and audio
-
-- Read **MP4 · MOV · WEBM · MKV · M4V · AVI** and
-  **MP3 · WAV · M4A · AAC · FLAC · AIFF · OGG · OPUS**
-- Export **MP4 · MOV · WEBM** and **MP3 · M4A · WAV · FLAC**
-- Convert between compatible formats, copying streams untouched when possible
-- Keep the source sound or remove the audio track entirely from video exports
-- Trim to an exact range
-- Extract the audio from a video — to **M4A** straight from an MP4 this is a
-  lossless container change, not a second generation
-- Export lossless **FLAC** — the same samples as WAV in roughly 40% of the space
-
-### Loops
-
-- Import animated **GIF** sources and preserve their frame timing and transparency
-- Convert animated GIFs to **MP4 · MOV · WEBM · GIF · animated WEBP**
-- Turn any clip into a **GIF** or an **animated WEBP**
-- Three sizes — Small, Standard, Large — that set width and frame rate together
-- Frame rates chosen so GIF's centisecond timing comes out exactly even, with no
-  judder
-- **GIF is capped at 15 seconds**, because every frame is a whole image and
-  length becomes file size. Animated WEBP keeps **30 seconds** — it compresses
-  between frames, and 30 seconds of it is smaller than 15 seconds of GIF
-- Never upscaled past the source
-
-### Images
-
-- Read **HEIC · HEIF · JPG · JPEG · PNG · WEBP · AVIF**, plus single-frame **GIF**
-- Export **JPG · PNG · WEBP · AVIF**
-- Choose or drop multiple local images for a batch with no fixed image count. Pick one output
-  format and compression setting, then one destination folder for the batch
-- Convert iPhone HEIC/HEIF photos through the same local image pipeline as a
-  single image. Outputs use the batch name and contiguous numbers, such as
-  `photos_1.jpg`, `photos_2.jpg`; existing files get collision-safe names
-- See per-image progress and a completion list. An image that fails does not
-  prevent later images from exporting
-- Quality presets for the lossy formats — None, Light, Balanced, Strong
-- Lossless optimization for PNG, which never touches a pixel
-- AVIF for the smallest photographs by a wide margin; it is not offered for
-  images with transparency, which it cannot carry
-
-Single-source exports use the native macOS Save panel. Image batches use a
-native folder picker and save their numbered files there. Long jobs show
-progress and can be cancelled.
-
-### Aspect and flip
-
-- Reframe any visual export — video, loop or image — to **16:9 · 9:16 · 1:1 ·
-  4:5 · 4:3**, or an exact size of your own
-- Position the crop directly on the preview: drag it to move, drag its handles
-  to resize. Preset ratios stay locked; **Freeform** resizes freely or with its
-  proportions locked
-- **Flip** horizontally, vertically or both, on its own or with any crop. The
-  preview in Resize and Edit shows exactly what the export will contain
-- **Fill** crops to the frame; **Fit** keeps the whole picture and pads the rest —
-  transparently for PNG and WEBP, black for everything else
-- Nothing is ever stretched, and the preset ratios never enlarge — they are cut
-  from the pixels the source already has
-- A custom size larger than the source says so, rather than quietly upscaling
-- The resulting dimensions are shown before you export
-
-## Privacy
-
-**Local files stay on your Mac.** Video, audio and image transformations run
-on-device. No accounts, no telemetry, no cloud uploads, no analytics.
-
-Analyzing and downloading a URL naturally requires network access. That path is
-intended for media you are authorized or legally permitted to download.
-SHIFT checks public destinations and confines media subprocesses to a local
-proxy that blocks private and loopback network targets. This supports public
-HTTP(S) media on ports 80 and 443; some unusual streams that require a direct
-FFmpeg network downloader cannot be fetched. See
-[`docs/URL_EGRESS.md`](docs/URL_EGRESS.md) for the boundary and limitations.
-
-## Built with
-
-Tauri 2 · React · TypeScript · Rust · FFmpeg and ffprobe · yt-dlp · native macOS
-image tooling
+Check [GitHub Releases](https://github.com/mattferre95/shift/releases) for published builds. The current local test package is intended for release validation, not public redistribution.
 
 ## Build locally
 
-Requires Node, Rust and the Xcode command line tools.
+Requires an Apple Silicon Mac, macOS 11 or newer, Node.js, Rust and Xcode Command Line Tools.
 
 ```bash
-npm install
+npm ci
 npm run sidecars
 npm run app:build
 ```
 
-`npm run sidecars` downloads FFmpeg, ffprobe and yt-dlp into
-`src-tauri/binaries/`. They are deliberately not committed, and the step is
-required before the first build.
-
-The result is `src-tauri/target/release/bundle/macos/SHIFT.app`.
-
-App icons are generated from the 1024px master in `src/assets/brand/` with
-`npm run icons` (macOS only).
+The sidecar script downloads the pinned FFmpeg 9.0.1 and yt-dlp 2026.08.19 builds, verifies their archives, and stores them outside Git. Tauri writes the app and DMG under `src-tauri/target/release/bundle/`. The local build is not notarized, so macOS may warn or block it; it is not equivalent to a Developer ID release.
 
 ```bash
-npm run app:dev                 # development
-cd src-tauri && cargo test      # tests (network tests are #[ignore]d)
+npm run app:dev               # development app
+npm test                      # frontend tests
+cd src-tauri && cargo test    # Rust tests; live network cases are ignored
 ```
 
-## Project status
+For build or playback problems, verify the three sidecars are present in `src-tauri/binaries/`, then review [architecture and packaging notes](docs/ARCHITECTURE.md). There is no automatic updater or support commitment.
 
-SHIFT is built primarily as my personal everyday media utility. The repository
-is public because I like building tools in the open.
+## Credits and license
 
-It is developed and tested on macOS running Apple Silicon. There are no signed
-or notarized releases, and no support commitment — build it yourself with the
-steps above.
+SHIFT application source: Copyright © 2026 Matt Ferre, [MIT License](LICENSE). The macOS bundle also contains [FFmpeg and ffprobe](https://ffmpeg.org/) and [yt-dlp](https://github.com/yt-dlp/yt-dlp), each under its own license. Exact versions, upstream archives, notices and the open source-distribution requirement are in [Third-party software and distribution status](docs/THIRD_PARTY_NOTICES.md). The bundled yt-dlp directory retains its packaged dependency notices.
 
-## Support
+Built with Tauri 2, React, TypeScript and Rust. See the [architecture](docs/ARCHITECTURE.md), [QA checklist](docs/QA_CHECKLIST.md) and [design notes](docs/DESIGN_SPEC.md) for development details.
 
-SHIFT™ started as a tool I wanted for myself and I share it publicly for others
-to use, explore and improve.
-
-If it saved you some time or you like what I'm building,
-[buy me a coffee](https://buymeacoffee.com/mattferre).
-
----
-
-Implementation notes live in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md),
-including the FFmpeg licensing position for the bundled builds.
+SHIFT started as a personal everyday media utility. If it is useful to you, [buy me a coffee](https://buymeacoffee.com/mattferre).
