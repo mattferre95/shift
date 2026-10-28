@@ -11,6 +11,22 @@ import { FramingStage } from "@/features/resize/ResizeView";
 
 /** Half the width of a range thumb: where the browser centres the 0% and 100% thumbs. */
 const HALF_THUMB = 9;
+const HANDLE_LABEL_WIDTH = 104;
+const HANDLE_LABEL_GAP = 4;
+
+/** Keep both timecodes inside the timeline and apart when handles converge. */
+function handleLabelPositions(start: number, end: number, total: number, width: number): [number, number] {
+  const maxLeft = Math.max(0, width - HANDLE_LABEL_WIDTH);
+  const place = (time: number) => Math.max(0, Math.min(maxLeft, time / total * width - HANDLE_LABEL_WIDTH / 2));
+  let inLeft = place(start);
+  let outLeft = place(end);
+  if (outLeft - inLeft < HANDLE_LABEL_WIDTH + HANDLE_LABEL_GAP) {
+    const pairWidth = HANDLE_LABEL_WIDTH * 2 + HANDLE_LABEL_GAP;
+    inLeft = Math.max(0, Math.min(width - pairWidth, (start + end) / (2 * total) * width - pairWidth / 2));
+    outLeft = inLeft + HANDLE_LABEL_WIDTH + HANDLE_LABEL_GAP;
+  }
+  return [inLeft, outLeft];
+}
 
 /**
  * The player and the trim range. All of the range arithmetic lives in
@@ -27,32 +43,78 @@ export function TrimPlayer({ header, compact = false }: { header?: ReactNode; co
   const stage = useRef<HTMLDivElement>(null);
   const rangeDrag = useRef<{ pointerId: number; x: number; start: number; width: number } | null>(null);
   const selection = useRef(false);
+  const playRequest = useRef(0);
+  const restarting = useRef(false);
   const reportedReady = useRef(false);
   const [time, setTime] = useState(0);
   const [playing, setPlaying] = useState(false);
+  const [selectionActive, setSelectionActive] = useState(false);
+  const [loopSelection, setLoopSelection] = useState<"once" | "loop">("once");
   const [ready, setReady] = useState(false);
   const [playError, setPlayError] = useState<string | null>(null);
   const [stageSize, setStageSize] = useState<{ w: number; h: number } | null>(null);
   const [framing, setFraming] = useState(false);
+  const [timelineWidth, setTimelineWidth] = useState(0);
   const total = s.duration ?? 0;
   const durationKnown = s.duration != null && s.duration > 0;
   const start = parseTimestamp(s.clipIn) ?? 0;
   const end = parseTimestamp(s.clipOut) ?? total;
   const valid = !s.clipError && start >= 0 && end > start && end <= total + 0.001;
-  const endRef = useRef(end);
-  endRef.current = end;
+  const range = useRef({ start, end, valid });
+  range.current = { start, end, valid };
+  const loop = useRef(loopSelection === "loop");
+  loop.current = loopSelection === "loop";
+  const exitSelection = () => {
+    selection.current = false;
+    setSelectionActive(false);
+    playRequest.current++;
+    restarting.current = false;
+  };
+  const startMedia = async (el: HTMLVideoElement) => {
+    const request = ++playRequest.current;
+    try { await el.play(); }
+    catch {
+      if (request === playRequest.current) {
+        el.pause(); exitSelection(); setPlayError("Playback couldn't start. Try again.");
+      }
+    } finally {
+      if (request === playRequest.current) restarting.current = false;
+    }
+  };
+  const checkSelectionBoundary = (ended = false) => {
+    const el = media.current;
+    if (!el || !selection.current) return;
+    const { start: inTime, end: outTime, valid: rangeValid } = range.current;
+    if (!rangeValid) { el.pause(); exitSelection(); return; }
+    if (ended || el.currentTime >= outTime) {
+      if (loop.current) {
+        el.currentTime = inTime;
+        setTime(inTime);
+        if (el.paused && !restarting.current) {
+          restarting.current = true;
+          void startMedia(el);
+        }
+      } else {
+        el.pause(); el.currentTime = outTime; setTime(outTime); exitSelection();
+      }
+    } else if (el.currentTime < inTime) {
+      el.currentTime = inTime;
+      setTime(inTime);
+    }
+  };
   useEffect(() => {
-    setTime(0); setPlaying(false); setReady(false); selection.current = false; reportedReady.current = false; setPlayError(null);
+    const element = media.current;
+    setTime(0); setPlaying(false); setReady(false); selection.current = false; setSelectionActive(false); reportedReady.current = false; setPlayError(null);
+    return () => { playRequest.current++; selection.current = false; element?.pause(); };
   }, [info?.path]);
+  useEffect(() => { checkSelectionBoundary(); }, [start, end, valid]);
   useEffect(() => {
     if (!playing) return;
     let frame = 0;
     const tick = () => {
       const el = media.current;
       if (!el) return;
-      if (selection.current && el.currentTime >= endRef.current) {
-        el.pause(); el.currentTime = endRef.current; selection.current = false;
-      }
+      checkSelectionBoundary();
       setTime(el.currentTime);
       frame = requestAnimationFrame(tick);
     };
@@ -67,10 +129,20 @@ export function TrimPlayer({ header, compact = false }: { header?: ReactNode; co
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
+  useLayoutEffect(() => {
+    const el = timeline.current;
+    if (!el) return;
+    const measure = () => setTimelineWidth(el.getBoundingClientRect().width);
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
   const seek = (value: number) => {
     const el = media.current;
     if (!el || !ready) return;
-    selection.current = false;
+    exitSelection();
     el.currentTime = Math.max(0, Math.min(total, value)); setTime(el.currentTime);
   };
   const playerReady = () => {
@@ -85,14 +157,22 @@ export function TrimPlayer({ header, compact = false }: { header?: ReactNode; co
     const el = media.current;
     if (!el || !ready) return;
     setPlayError(null);
-    if (!selected && !el.paused) { el.pause(); selection.current = false; return; }
-    selection.current = selected;
-    if (selected) el.currentTime = start;
-    else if (el.ended || el.currentTime >= total) el.currentTime = 0;
-    try { await el.play(); } catch { selection.current = false; setPlayError("Playback couldn't start. Try again."); }
+    if (selected) {
+      if (!valid) return;
+      if (selection.current && !el.paused) { el.pause(); playRequest.current++; restarting.current = false; return; }
+      if (!selection.current || el.currentTime < start || el.currentTime >= end) el.currentTime = start;
+      selection.current = true;
+      setSelectionActive(true);
+    } else {
+      const wasSelected = selection.current;
+      exitSelection();
+      if (!wasSelected && !el.paused) { el.pause(); return; }
+      if (el.ended || el.currentTime >= total) el.currentTime = 0;
+      if (wasSelected && !el.paused) return;
+    }
+    await startMedia(el);
   };
   const resize = (which: "in" | "out", value: number) => {
-    selection.current = false;
     if (which === "in") s.resizeClipIn(value);
     else s.resizeClipOut(value);
   };
@@ -101,7 +181,7 @@ export function TrimPlayer({ header, compact = false }: { header?: ReactNode; co
     if (!bounds || bounds.width <= 0 || !valid || total <= 0) return;
     event.preventDefault();
     event.currentTarget.setPointerCapture?.(event.pointerId);
-    selection.current = false;
+    exitSelection();
     rangeDrag.current = { pointerId: event.pointerId, x: event.clientX, start, width: bounds.width };
   };
   const dragRange = (event: ReactPointerEvent<HTMLButtonElement>) => {
@@ -121,6 +201,9 @@ export function TrimPlayer({ header, compact = false }: { header?: ReactNode; co
   const box = p?.content && flip ? flipContent(p.content, flip) : p?.content;
   const fit = box && stageSize ? Math.min(stageSize.w / box.canvasWidth, stageSize.h / box.canvasHeight) : null;
   const pct = (n: number) => `${Math.max(0, Math.min(100, n / (total || 1) * 100))}%`;
+  const [inLabelLeft, outLabelLeft] = durationKnown && timelineWidth >= HANDLE_LABEL_WIDTH * 2 + HANDLE_LABEL_GAP
+    ? handleLabelPositions(start, end, total, timelineWidth)
+    : [null, null];
   const statusLabel = status === "resolving" ? "Resolving link" : status === "downloading" ? "Downloading preview" : status === "preparing" ? "Preparing player" : "Ready";
   const transport = "flex h-8 items-center justify-center gap-[6px] rounded-[8px] border border-[var(--hairline-strong)] bg-[image:var(--control-gradient)] px-3 text-[12.5px] font-medium text-shift-text transition-colors duration-[140ms] enabled:hover:border-[var(--hairline-bright)] disabled:cursor-not-allowed disabled:opacity-40";
   const message = s.clipError ?? playError ?? (s.clipSeconds != null ? `${formatMediaTime(s.clipSeconds)} selected` : "Choose a range");
@@ -161,9 +244,10 @@ export function TrimPlayer({ header, compact = false }: { header?: ReactNode; co
                 muted={!s.soundEnabled}
                 aria-label={info.hasVideo ? "Media preview" : "Audio playback"}
                 style={box && fit && info.hasVideo ? { position: "absolute", maxWidth: "none", width: `${box.frameWidth / box.canvasWidth * 100}%`, height: `${box.frameHeight / box.canvasHeight * 100}%`, left: `${box.offsetX / box.canvasWidth * 100}%`, top: `${box.offsetY / box.canvasHeight * 100}%`, transform: flip ? flipStyle(flip) : undefined } : { width: "100%", height: "100%", objectFit: "contain", transform: flip && info.hasVideo ? flipStyle(flip) : undefined }}
-                onLoadedMetadata={resetToFirstFrame} onLoadedData={playerReady} onCanPlay={playerReady} onError={() => void fallback()}
-                onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onEnded={() => {setPlaying(false); selection.current = false;}}
-                onTimeUpdate={() => { const el = media.current; if (!el) return; if (selection.current && el.currentTime >= endRef.current) { el.pause(); el.currentTime = endRef.current; selection.current = false; } setTime(el.currentTime); }} />
+                onLoadedMetadata={resetToFirstFrame} onLoadedData={playerReady} onCanPlay={playerReady}
+                onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onEnded={() => { setPlaying(false); checkSelectionBoundary(true); }}
+                onTimeUpdate={() => { checkSelectionBoundary(); if (media.current) setTime(media.current.currentTime); }}
+                onError={() => { media.current?.pause(); exitSelection(); void fallback(); }} />
             </div>
             {!info.hasVideo && <span className="text-[12px]">Audio</span>}
           </div>
@@ -185,12 +269,13 @@ export function TrimPlayer({ header, compact = false }: { header?: ReactNode; co
       {header}
 
       <div className="flex flex-wrap items-center gap-2">
-        <button type="button" className={transport.replace("px-3", "w-9 px-0")} disabled={!ready || busy || !!error} onClick={() => void play()} aria-label={playing ? "Pause" : "Play"}>
+        <button type="button" className={transport.replace("px-3", "w-9 px-0")} disabled={!ready || busy || !!error} onClick={() => void play()} aria-label={playing && !selectionActive ? "Pause" : "Play"}>
           <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true" fill="currentColor">
-            <path d={playing ? "M7 5h3.5v14H7zM13.5 5H17v14h-3.5z" : "M7 4.5v15l13-7.5z"} />
+            <path d={playing && !selectionActive ? "M7 5h3.5v14H7zM13.5 5H17v14h-3.5z" : "M7 4.5v15l13-7.5z"} />
           </svg>
         </button>
-        {!compact && <button type="button" className={transport} disabled={!ready || !valid || busy || !!error} onClick={() => void play(true)}>Play Selection</button>}
+        <button type="button" className={compact ? transport.replace("px-3", "px-2") : transport} disabled={!ready || !durationKnown || !valid || busy || !!error} title={!durationKnown ? "Selection playback needs a known duration" : !valid ? s.clipError ?? "Choose a valid IN–OUT range" : !s.clipEnabled ? "Preview only · Export uses the full source" : undefined} onClick={() => void play(true)}><span aria-hidden="true">{selectionActive && playing ? "⏸" : "▶"}</span><span>{selectionActive && playing ? "Pause Selection" : "Play Selection"}</span></button>
+        <Segmented label="Selection playback" size="sm" options={[{ id: "once", label: "Once" }, { id: "loop", label: "Loop" }]} value={loopSelection} onChange={setLoopSelection} />
         <span className="ml-auto font-mono text-[12px] text-shift-dim">{formatMediaTime(time)} / {durationKnown ? formatMediaTime(total) : "—"}</span>
       </div>
 
@@ -220,8 +305,8 @@ export function TrimPlayer({ header, compact = false }: { header?: ReactNode; co
               </button>
             </>
           )}
-          {durationKnown && <Handle at={pct(start)} label="IN" />}
-          {durationKnown && <Handle at={pct(end)} label="OUT" />}
+          {durationKnown && <Handle at={pct(start)} label={`IN ${formatTimestamp(start)}`} labelLeft={inLabelLeft} />}
+          {durationKnown && <Handle at={pct(end)} label={`OUT ${formatTimestamp(end)}`} labelLeft={outLabelLeft} />}
           {ready && (
             <span
               aria-hidden="true"
@@ -265,10 +350,10 @@ export function TrimPlayer({ header, compact = false }: { header?: ReactNode; co
 }
 
 /** A visible trim handle. The draggable part is the range input's thumb above it. */
-function Handle({ at, label }: { at: string; label: string }) {
+function Handle({ at, label, labelLeft }: { at: string; label: string; labelLeft: number | null }) {
   return (
     <>
-      <span aria-hidden="true" className="pointer-events-none absolute top-0 z-20 -translate-x-1/2 text-[10px] font-semibold text-shift-link" style={{ left: at }}>
+      <span aria-hidden="true" className="pointer-events-none absolute top-0 z-20 w-[104px] whitespace-nowrap text-center font-mono text-[10px] font-semibold text-shift-link" style={labelLeft == null ? { left: at, transform: "translateX(-50%)" } : { left: labelLeft }}>
         {label}
       </span>
       <span
