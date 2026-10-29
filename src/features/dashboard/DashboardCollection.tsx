@@ -17,12 +17,12 @@ export function DashboardCollection() {
   if (!batch && !post) return null;
   const selected = batch ? s.selectedBatchCount : s.selectedMediaCount;
   const items = batch?.items ?? post?.mediaItems ?? [];
-  return <div className="dashboard-collection grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_minmax(190px,0.75fr)] gap-3" aria-label={batch ? "Image batch" : "Post media"}>
+  return <div className="dashboard-collection grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_minmax(190px,0.75fr)] gap-3" aria-label={batch ? batch.pdfSource ? "PDF pages" : "Image batch" : "Post media"}>
     <section className="shift-panel flex min-h-0 flex-col overflow-hidden p-3">
       <div className="flex items-center gap-2 border-b border-[var(--hairline)] pb-2">
-        <strong className="text-[13px] text-shift-text">{count} {batch ? "images" : "post items"}</strong>
+        <strong className="text-[13px] text-shift-text">{count} {batch ? batch.pdfSource ? "PDF pages" : "images" : "post items"}</strong>
         <span className="text-[11px] text-shift-soft">{selected} selected</span>
-        {batch && <button type="button" onClick={s.openFilePicker} className="ml-auto text-[11px] font-semibold text-shift-link">+ Add files</button>}
+        {batch && !batch.pdfSource && <button type="button" onClick={s.openFilePicker} className="ml-auto text-[11px] font-semibold text-shift-link">+ Add files</button>}
       </div>
       <div className="flex items-center gap-3 py-2 text-[11px]">
         <button type="button" onClick={batch ? s.selectAllBatch : s.selectAllPostMedia} className="text-shift-link">Select all</button>
@@ -46,8 +46,8 @@ export function DashboardCollection() {
       {batch ? <>
         <label className="flex flex-col gap-1 text-[11px] text-shift-soft">Batch name<input value={batch.name} onChange={(e) => s.setBatchName(e.target.value)} className="h-8 w-full rounded-md border border-[var(--hairline)] bg-shift-input px-2 text-[12px] text-shift-text" /></label>
         <label className="flex flex-col gap-1 text-[11px] text-shift-soft">Output format<select value={s.format} onChange={(e) => s.setFormat(e.target.value as OutputFormat)} className="h-8 rounded-md border border-[var(--hairline)] bg-shift-input px-2 text-shift-text">{s.outputs.map((f) => <option key={f}>{f}</option>)}</select></label>
-        <label className="flex flex-col gap-1 text-[11px] text-shift-soft">Compression<select value={s.compression} onChange={(e) => s.setCompression(e.target.value as Compression)} className="h-8 rounded-md border border-[var(--hairline)] bg-shift-input px-2 text-shift-text">{s.compressionChoices.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}</select></label>
-        <div className="text-[11px] text-shift-dim">{selected} numbered {selected === 1 ? "file" : "files"} will export in source order.</div>
+        {s.format !== "PDF" && <label className="flex flex-col gap-1 text-[11px] text-shift-soft">Compression<select value={s.compression} onChange={(e) => s.setCompression(e.target.value as Compression)} className="h-8 rounded-md border border-[var(--hairline)] bg-shift-input px-2 text-shift-text">{s.compressionChoices.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}</select></label>}
+        <div className="text-[11px] text-shift-dim">{s.format === "PDF" ? `${selected} selected images will become one PDF in source order.` : `${selected} numbered ${batch.pdfSource ? selected === 1 ? "page" : "pages" : selected === 1 ? "file" : "files"} will export in source order.`}</div>
         {batch.skipped.length > 0 && <div role="alert" className="text-[11px] text-shift-danger">{batch.skipped.length} incompatible files skipped.</div>}
       </> : <>
         <div className="text-[12px] font-semibold text-shift-text">Save original post media</div>

@@ -26,6 +26,7 @@ pub enum OutputFormat {
     Png,
     Webp,
     Avif,
+    Pdf,
 }
 
 impl OutputFormat {
@@ -44,6 +45,7 @@ impl OutputFormat {
             OutputFormat::Png => "png",
             OutputFormat::Webp => "webp",
             OutputFormat::Avif => "avif",
+            OutputFormat::Pdf => "pdf",
         }
     }
 
@@ -62,6 +64,7 @@ impl OutputFormat {
             OutputFormat::Png => "PNG",
             OutputFormat::Webp => "WEBP",
             OutputFormat::Avif => "AVIF",
+            OutputFormat::Pdf => "PDF",
         }
     }
 
@@ -130,6 +133,7 @@ pub fn image_options(has_alpha: bool) -> Vec<OutputFormat> {
     if !has_alpha {
         out.push(OutputFormat::Avif);
     }
+    out.push(OutputFormat::Pdf);
     out
 }
 
@@ -384,7 +388,8 @@ fn audio_codec_fits(container: OutputFormat, codec: &str) -> bool {
         | OutputFormat::Jpg
         | OutputFormat::Png
         | OutputFormat::Webp
-        | OutputFormat::Avif => false,
+        | OutputFormat::Avif
+        | OutputFormat::Pdf => false,
     }
 }
 

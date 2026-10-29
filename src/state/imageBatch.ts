@@ -11,6 +11,7 @@ export function appendImages(batch: ImageBatch | null, media: LocalMedia[], skip
         name: media[0]?.name.replace(/\.[^.]+$/, "") ?? "images",
         destination: null,
         skipped,
+        pdfSource: null,
       };
 }
 

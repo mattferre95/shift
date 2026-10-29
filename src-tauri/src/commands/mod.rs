@@ -8,10 +8,11 @@ use crate::filesystem;
 use crate::jobs::{self, ExportRequest, JobRegistry};
 use crate::media::aspect::{self, AspectSpec, ContentBox, FrameMode};
 use crate::media::image;
+use crate::media::pdf;
 use crate::media::preview;
 use crate::media::profiles::LoopSize;
 use crate::media::{ffprobe::probe, profiles};
-use crate::process::CancelToken;
+use crate::process::{Binary, CancelToken};
 use crate::providers::{self, BrowserSessionMode, DownloadKind, PostMedia, PostMediaType, UrlMedia};
 use crate::settings::SettingsStore;
 use crate::validation;
@@ -185,6 +186,126 @@ pub async fn download_post_items(
         ShiftError::new("internal", "SHIFT couldn't download that post.")
             .technical(e.to_string())
     })?;
+    app.state::<JobRegistry>().finish(&job_id);
+    result
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PdfImportResult {
+    pub source_name: String,
+    pub pages: Vec<LocalMedia>,
+}
+
+#[tauri::command]
+pub async fn import_pdf(app: AppHandle, path: String) -> Result<PdfImportResult> {
+    let (result, cache) = tauri::async_runtime::spawn_blocking(move || {
+        let source = validation::validate_input_path(&path)?;
+        if !source.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("pdf")) {
+            return Err(ShiftError::unsupported_file());
+        }
+        let count = pdf::page_count(&source)?;
+        let name = source.file_stem().unwrap_or_default().to_string_lossy().to_string();
+        let cache = std::env::temp_dir().join("SHIFT").join(format!("pdf-import-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&cache).map_err(|e| ShiftError::io("create PDF page cache", e))?;
+        let conversion = (|| {
+            let rendered = pdf::render_pages(&source, &cache, count)?;
+            let mut pages = Vec::with_capacity(count);
+            for (index, page) in rendered.iter().enumerate() {
+                let (width, height) = pdf::png_dimensions(page)?;
+                pages.push(LocalMedia {
+                    kind: "image", path: page.to_string_lossy().into_owned(),
+                    name: format!("{} - Page {}.png", name, index + 1), ext: "PNG".into(),
+                    size_bytes: std::fs::metadata(page).map(|v| v.len()).unwrap_or(0),
+                    duration: None, width: Some(width), height: Some(height),
+                    has_video: false, has_audio: false,
+                    outputs: profiles::image_options(false).into_iter()
+                        .filter(|format| *format != profiles::OutputFormat::Pdf)
+                        .map(|format| format.label().to_string()).collect(),
+                    has_alpha: false,
+                });
+            }
+            Ok(PdfImportResult { source_name: name, pages })
+        })();
+        match conversion {
+            Ok(result) => Ok((result, cache)),
+            Err(error) => { let _ = std::fs::remove_dir_all(cache); Err(error) }
+        }
+    }).await.map_err(|e| ShiftError::new("internal", "SHIFT couldn't open that PDF.").technical(e.to_string()))??;
+    app.state::<pdf::PdfCacheRegistry>().register(cache);
+    Ok(result)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PdfExportRequest {
+    pub sources: Vec<String>,
+    pub destination_path: String,
+    pub job_id: String,
+}
+
+#[tauri::command]
+pub async fn export_pdf(app: AppHandle, request: PdfExportRequest) -> Result<jobs::JobOutput> {
+    if uuid::Uuid::parse_str(&request.job_id).is_err() {
+        return Err(ShiftError::validation("Invalid PDF export job."));
+    }
+    let token = app.state::<JobRegistry>().register(&request.job_id);
+    let job_id = request.job_id.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        if request.sources.is_empty() || request.sources.len() > pdf::MAX_PAGES {
+            return Err(ShiftError::validation(format!("Choose between 1 and {} images.", pdf::MAX_PAGES)));
+        }
+        let destination = validation::normalize_destination(&request.destination_path, "pdf")?;
+        let temp = filesystem::TempDir::create(&format!("pdf-export-{}", uuid::Uuid::new_v4()))?;
+        let output = temp.path().join("output.pdf");
+        let mut sources = Vec::with_capacity(request.sources.len());
+        let mut source_bytes = 0u64;
+        for (index, raw) in request.sources.iter().enumerate() {
+            if token.is_cancelled() { return Err(ShiftError::cancelled()); }
+            let path = validation::validate_input_path(raw)?;
+            let ext = path.extension().unwrap_or_default().to_string_lossy().to_ascii_lowercase();
+            let still_gif = ext == "gif" && crate::media::ffprobe::frame_count(&path, &token)? <= 1;
+            if !image::is_image_ext(&ext) && !still_gif {
+                return Err(ShiftError::unsupported_file());
+            }
+            let info = image::probe(&path, &token)?;
+            source_bytes = source_bytes.saturating_add(info.size_bytes);
+            if ext == "jpg" || ext == "jpeg" || ext == "png" {
+                sources.push(path);
+                continue;
+            }
+            // Decode every other accepted image with the same pipeline SHIFT
+            // uses for image export. PDFKit then receives a lossless PNG.
+            let work_dir = temp.sub(&format!("image-{index}"))?;
+            let decoded = work_dir.join("decoded.png");
+            let plan = image::build_plan(&path, &info.format, profiles::OutputFormat::Png,
+                image::Compression::None, info.has_alpha, (info.width, info.height),
+                &aspect::AspectSpec::default(), &work_dir, &decoded)?;
+            for step in plan.steps {
+                if token.is_cancelled() { return Err(ShiftError::cancelled()); }
+                let (binary, args) = match step {
+                    image::ImageStep::Sips(args) => (Binary::Sips, args),
+                    image::ImageStep::Ffmpeg(args) => (Binary::Ffmpeg, args),
+                };
+                let result = crate::process::run_capture(binary, &args, &token)?;
+                if !result.success {
+                    return Err(ShiftError::new("pdf_image_failed", "SHIFT couldn't prepare an image for the PDF.")
+                        .technical(result.log()));
+                }
+            }
+            sources.push(decoded);
+        }
+        pdf::create_from_images(&sources, &output)?;
+        if token.is_cancelled() { return Err(ShiftError::cancelled()); }
+        let size = filesystem::finalize(&output, &destination)?;
+        let folder = destination.parent().unwrap();
+        Ok(jobs::JobOutput {
+            path: destination.to_string_lossy().into_owned(),
+            filename: destination.file_name().unwrap_or_default().to_string_lossy().into_owned(),
+            size_bytes: size, remuxed: false, source_bytes: Some(source_bytes),
+            directory: validation::abbreviate_home(folder),
+        })
+    }).await.map_err(|e| ShiftError::new("internal", "SHIFT couldn't create that PDF.").technical(e.to_string()))?;
     app.state::<JobRegistry>().finish(&job_id);
     result
 }
@@ -370,6 +491,9 @@ pub fn validate_clip(start: String, end: String, duration: Option<f64>) -> Resul
 
 #[tauri::command]
 pub fn start_export(app: AppHandle, request: ExportRequest) -> Result<String> {
+    if request.format == profiles::OutputFormat::Pdf {
+        return Err(ShiftError::validation("Use PDF export for selected local images."));
+    }
     Ok(jobs::spawn(app, request))
 }
 
@@ -462,6 +586,7 @@ pub fn health(app: AppHandle) -> Health {
 /// Cancel everything still running when the window goes away.
 pub fn shutdown(app: &AppHandle) {
     app.state::<JobRegistry>().cancel_all();
+    app.state::<pdf::PdfCacheRegistry>().clear();
     app.state::<crate::media::playback::PlaybackRegistry>()
         .clear();
     let _ = std::fs::remove_dir_all(std::env::temp_dir().join("SHIFT").join("thumbs"));

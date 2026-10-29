@@ -8,9 +8,9 @@ import { useShift } from "@/state/shift";
 import { useView } from "@/state/view";
 import { isAnimationFormat, isAudioFormat, isImageFormat, type OutputFormat } from "@/types";
 
-type Kind = "video" | "loop" | "audio" | "image";
+type Kind = "video" | "loop" | "audio" | "image" | "document";
 
-const KIND_LABEL: Record<Kind, string> = { video: "Video", loop: "Loop", audio: "Audio", image: "Image" };
+const KIND_LABEL: Record<Kind, string> = { video: "Video", loop: "Loop", audio: "Audio", image: "Image", document: "Document" };
 
 /**
  * What an output is, from this source. WEBP is a still from a photo and an
@@ -18,6 +18,7 @@ const KIND_LABEL: Record<Kind, string> = { video: "Video", loop: "Loop", audio: 
  * the same rule `isLoop` follows in the state.
  */
 function kindOf(f: OutputFormat, sourceMoves: boolean, isImage: boolean): Kind {
+  if (f === "PDF") return "document";
   if (isAudioFormat(f)) return "audio";
   if (isAnimationFormat(f) && sourceMoves && !isImage) return "loop";
   if (isImageFormat(f)) return "image";
@@ -81,7 +82,7 @@ function End({ label, value, kind, strong }: { label: string; value: string; kin
 /** Every output this source offers, grouped by what it produces. Empty groups are left out. */
 function FormatGrid() {
   const s = useShift();
-  const order: Kind[] = ["video", "loop", "audio", "image"];
+  const order: Kind[] = ["video", "loop", "audio", "image", "document"];
   const groups = order
     .map((k) => ({ kind: k, formats: s.outputs.filter((f) => kindOf(f, s.sourceMoves, s.isImage) === k) }))
     .filter((g) => g.formats.length > 0);

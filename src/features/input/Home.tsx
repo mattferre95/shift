@@ -147,7 +147,7 @@ function DropZone() {
       </div>
       <div className="flex flex-col items-center gap-1 text-center">
         <div className="text-[15px] font-semibold text-shift-text">Drop a file here</div>
-        <div className="text-[13px] text-shift-soft">Video, audio, images and GIFs</div>
+        <div className="text-[13px] text-shift-soft">Video, audio, images, GIFs and PDFs</div>
       </div>
       <Button
         size="sm"

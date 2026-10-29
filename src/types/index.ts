@@ -3,7 +3,7 @@
 export type OutputFormat =
   | "MP4" | "MOV" | "WEBM" | "GIF"
   | "MP3" | "WAV" | "M4A" | "AAC" | "FLAC"
-  | "JPG" | "PNG" | "WEBP" | "AVIF";
+  | "JPG" | "PNG" | "WEBP" | "AVIF" | "PDF";
 
 export const AUDIO_FORMATS: OutputFormat[] = ["MP3", "WAV", "M4A", "AAC", "FLAC"];
 export const IMAGE_FORMATS: OutputFormat[] = ["JPG", "PNG", "WEBP", "AVIF"];
@@ -167,6 +167,7 @@ export type Compression = "none" | "light" | "balanced" | "strong" | "optimize";
  * time recompressing. This mirrors `image::options_for` on the Rust side.
  */
 export function compressionOptions(format: OutputFormat): { id: Compression; label: string }[] {
+  if (format === "PDF") return [{ id: "none", label: "None" }];
   if (format === "PNG") {
     return [
       { id: "none", label: "None" },
@@ -255,6 +256,8 @@ export interface ImageBatch {
   name: string;
   destination: string | null;
   skipped: { path: string; reason: string }[];
+  /** Set when the batch came from PDF pages. */
+  pdfSource: string | null;
 }
 
 export type JobState =

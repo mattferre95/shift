@@ -2,7 +2,7 @@
   <img src="src/assets/brand/shift-text.png" alt="SHIFT wordmark" width="280">
   <h1>SHIFT™</h1>
   <p><strong>Anything in. Anything out.</strong></p>
-  <p>A local-first macOS workspace for trimming, reframing, converting and exporting video, audio, images and GIFs.</p>
+  <p>A local-first macOS workspace for trimming, reframing, converting and exporting video, audio, images, GIFs and PDFs.</p>
   <p><strong>v1.4.0 · Apple Silicon</strong></p>
   <p><a href="#screenshots">View screenshots</a> · <a href="#build-locally">Build locally</a> · <a href="#downloads">Download status</a></p>
 </div>
@@ -17,7 +17,7 @@ SHIFT brings source, preview, timeline, output format and export into one Dashbo
 
 - **Edit with context.** Preview video and audio, select an IN/OUT range on the timeline, use 10s, 15s, 30s and 1m presets, and keep the result in a single export workflow.
 - **Shape the output.** Change aspect ratio, position a crop, choose Fill or Fit, flip the picture, and keep or remove source sound. The preview and output dimensions show the result before export.
-- **Convert local media.** Work with common video, audio and image inputs; export MP4, MOV, WEBM, GIF, animated WEBP, MP3, M4A, WAV, FLAC, JPG, PNG, WEBP and AVIF where they apply. Local image batches can be converted together.
+- **Convert local media.** Work with common video, audio and image inputs; export MP4, MOV, WEBM, GIF, animated WEBP, MP3, M4A, WAV, FLAC, JPG, PNG, WEBP and AVIF where they apply. Local image batches can be converted together. Combine selected images into one PDF, or export PDF pages as separate JPG, PNG, WEBP or AVIF images.
 - **Work with public links.** Analyze supported HTTP(S) media through yt-dlp and download or export available items. Site support can change. Only download media you are authorized or legally permitted to use.
 - **Stay local.** File transformations run on your Mac. SHIFT has no account, telemetry or cloud upload. Link analysis and downloads require network access; [URL egress limits](docs/URL_EGRESS.md) are documented separately.
 

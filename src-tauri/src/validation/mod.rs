@@ -154,8 +154,8 @@ pub fn validate_output_dir(raw: &str) -> Result<PathBuf> {
 
 /// Every extension SHIFT can produce. Used to decide whether a user-typed
 /// extension is one we may replace, or an ordinary part of their filename.
-const KNOWN_EXTS: [&str; 10] = [
-    "mp4", "mov", "webm", "mp3", "wav", "m4a", "aac", "jpg", "png", "webp",
+const KNOWN_EXTS: [&str; 11] = [
+    "mp4", "mov", "webm", "mp3", "wav", "m4a", "aac", "jpg", "png", "webp", "pdf",
 ];
 
 /// Validate a destination chosen through the native Save panel and force its

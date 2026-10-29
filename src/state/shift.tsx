@@ -461,6 +461,21 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
       const generation = ++sourceGeneration.current;
       lastInput.current = { kind: "file", value: path };
       patch({ analyzing: true, error: null, inputWarning: null, dragging: false });
+      if (/\.pdf$/i.test(path)) {
+        void ipc.importPdf(path).then(({ sourceName, pages }) => {
+          if (generation !== sourceGeneration.current) return;
+          const batch = appendImages(null, pages, []);
+          set((prev) => ({ ...prev, screen: "batch", analyzing: false,
+            localMedia: null, urlMedia: null, batch: { ...batch, name: sourceName, pdfSource: path },
+            format: "PNG", compression: "none", aspect: ASPECT_DEFAULT, flip: FLIP_NONE,
+            clipEnabled: false, clipError: null, clipSeconds: null,
+            previewSource: null, previewError: null, output: null, error: null }));
+        }).catch((error) => {
+          if (generation === sourceGeneration.current)
+            patch({ analyzing: false, screen: "error", error: ipc.toShiftError(error) });
+        });
+        return;
+      }
       ipc
         .analyzeFile(path)
         .then((media) => {
@@ -508,6 +523,11 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
     (paths: string[]) => {
       if (!paths.length || s.analyzing) return;
       pendingUrl.current = false;
+      if (paths.some((path) => /\.pdf$/i.test(path)) && (paths.length !== 1 || !!s.batch)) {
+        patch({ screen: "error", error: { code: "pdf_selection", message: "Open one PDF at a time.",
+          hint: "Choose a single PDF to export its pages as images.", technical: null } });
+        return;
+      }
       if (paths.length === 1 && !s.batch) { acceptFile(paths[0]); return; }
       const generation = ++sourceGeneration.current;
       lastInput.current = null;
@@ -562,7 +582,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
           extensions: [
             "mp4", "mov", "webm", "mkv", "m4v", "avi",
             "mp3", "wav", "m4a", "aac", "flac", "aiff", "aif", "ogg", "opus",
-            "heic", "heif", "jpg", "jpeg", "png", "webp", "avif", "gif",
+            "heic", "heif", "jpg", "jpeg", "png", "webp", "avif", "gif", "pdf",
           ],
         },
       ],
@@ -625,7 +645,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
   const isLoop = isAnimationFormat(s.format) && sourceMoves && !isImage;
   // Sound has no shape. ASPECT appears only when the thing being produced is
   // something you can look at.
-  const showAspect = (sourceMoves || isImage) && !isAudioFormat(s.format);
+  const showAspect = (sourceMoves || isImage) && !isAudioFormat(s.format) && s.format !== "PDF";
   // Reported by the native layer alongside the dimensions, so the warning and
   // the numbers can never disagree.
   const aspectUpscales = s.aspectPreview?.upscales ?? false;
@@ -785,6 +805,43 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
   const startExport = useCallback(async () => {
     if (!canExport || savingRef.current) return;
     const generation = sourceGeneration.current;
+    if (s.format === "PDF") {
+      const sources = s.batch ? selectedImages(s.batch).map((item) => item.media.path)
+        : s.localMedia?.kind === "image" ? [s.localMedia.path] : [];
+      if (!sources.length) return;
+      savingRef.current = true;
+      setSaving(true);
+      try {
+        const { save } = await import("@tauri-apps/plugin-dialog");
+        const folder = s.outputDir || await ipc.defaultOutputDir();
+        const base = (s.batch?.name ?? s.localMedia?.name.replace(/\.[^.]+$/, "") ?? "images")
+          .replace(/[/:]/g, "-");
+        const chosen = await save({ defaultPath: `${folder}/${base}.pdf`,
+          filters: [{ name: "PDF", extensions: ["pdf"] }] });
+        if (typeof chosen !== "string" || !chosen) return;
+        const directory = chosen.slice(0, chosen.lastIndexOf("/")) || folder;
+        const saved = await ipc.setOutputDir(directory).catch(() => directory);
+        if (generation !== sourceGeneration.current) return;
+        const id = crypto.randomUUID();
+        jobRef.current = id;
+        patch({ screen: "processing", outputDir: saved, error: null, output: null,
+          job: { id, state: "processing", stageLabel: `Creating PDF from ${sources.length} image${sources.length === 1 ? "" : "s"}…`,
+            stageIndex: 0, stageCount: 1, progress: null, filename: `${base}.pdf` } });
+        setSaving(false);
+        const output = await ipc.exportPdf(sources, chosen, id);
+        if (generation !== sourceGeneration.current) return;
+        jobRef.current = null;
+        patch({ screen: "complete", job: null, output });
+      } catch (error) {
+        if (generation === sourceGeneration.current) {
+          jobRef.current = null;
+          const failure = ipc.toShiftError(error);
+          patch(failure.code === "cancelled" ? { screen: s.batch ? "batch" : "local", job: null }
+            : { screen: "error", job: null, error: failure });
+        }
+      } finally { savingRef.current = false; setSaving(false); }
+      return;
+    }
     if (s.batch) {
       savingRef.current = true;
       setSaving(true);
@@ -810,7 +867,8 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
             clip: null, sourceTitle: null, sourceHint: null, sourceDuration: null,
             outputDir: chosen, compression: s.compression, loopSize: null,
             aspect: null, soundEnabled: true, destinationPath: null,
-            batchNaming: { base: s.batch.name, ordinal: index + 1 },
+            batchNaming: { base: s.batch.name, ordinal: s.batch.pdfSource
+              ? s.batch.items.findIndex((entry) => entry.id === item.id) + 1 : index + 1 },
           };
           try {
             const finished = new Promise<JobEvent>((resolve) => { run.resolve = resolve; });
@@ -1005,6 +1063,10 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
   }, [cancel, saving, s.screen, s.analyzing, s.urlMedia, s.batch]);
 
   const retry = useCallback(() => {
+    if (s.batch && s.screen === "error") {
+      patch({ screen: "batch", error: null });
+      return;
+    }
     const last = lastInput.current;
     if (!last) {
       reset();
@@ -1012,7 +1074,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
     }
     if (last.kind === "url") submitUrl(last.value, s.browserSession);
     else acceptFile(last.value);
-  }, [reset, submitUrl, acceptFile, s.browserSession]);
+  }, [reset, submitUrl, acceptFile, s.browserSession, s.batch, s.screen, patch]);
 
   const retryWithChrome = useCallback(() => {
     const last = lastInput.current;

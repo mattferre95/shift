@@ -388,7 +388,7 @@ fn output_stem(
     }
     let timed = !matches!(
         request.format,
-        OutputFormat::Jpg | OutputFormat::Png | OutputFormat::Avif
+        OutputFormat::Jpg | OutputFormat::Png | OutputFormat::Avif | OutputFormat::Pdf
     );
     if let Some(seconds) = clip
         .map(|range| range.duration())

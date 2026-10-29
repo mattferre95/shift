@@ -10,15 +10,15 @@ export function ImageBatchView() {
   return (
     <div className="shift-enter absolute inset-0 flex flex-col gap-3 overflow-hidden p-3 min-[900px]:p-4">
       <div className="flex shrink-0 items-center justify-between gap-3">
-        <div><h2 className="m-0 text-[19px] font-semibold text-shift-text">{batch.items.length} images</h2>
+        <div><h2 className="m-0 text-[19px] font-semibold text-shift-text">{batch.pdfSource ? `${batch.items.length} PDF pages` : `${batch.items.length} images`}</h2>
           <p className="m-0 text-[12px] text-shift-soft">{s.analyzing ? "Adding files…" : `${s.selectedBatchCount} selected for export`}</p></div>
-        <div className="flex gap-2"><Button size="sm" onClick={s.openFilePicker} disabled={s.analyzing}>+ Add files</Button><Button size="sm" onClick={s.reset}>New Shift</Button></div>
+        <div className="flex gap-2"><Button size="sm" onClick={s.openFilePicker} disabled={s.analyzing || !!batch.pdfSource}>+ Add files</Button><Button size="sm" onClick={s.reset}>New Shift</Button></div>
       </div>
       <div className="shift-panel flex min-h-0 flex-1 flex-col overflow-hidden">
         <div className="flex shrink-0 items-center gap-3 border-b border-[var(--hairline)] px-4 py-2 text-[12px] text-shift-soft">
           <button type="button" onClick={s.selectAllBatch} disabled={s.analyzing}>Select all</button>
           <button type="button" onClick={s.deselectAllBatch} disabled={s.analyzing}>Deselect all</button>
-          <span className="ml-auto">Source order is export order</span>
+          <span className="ml-auto">{batch.pdfSource ? "Page order is export order" : "Source order is export order"}</span>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto" role="list" aria-label="Images in batch">
           {batch.items.map((item) => (
@@ -42,12 +42,12 @@ export function ImageBatchView() {
         <div className="flex flex-col gap-1 text-[11px] text-shift-soft">Output format
           <div className="flex gap-1">{s.outputs.map((format) => <Chip key={format} label={format} selected={s.format === format} onClick={() => s.setFormat(format)} />)}</div>
         </div>
-        <label className="flex flex-col gap-1 text-[11px] text-shift-soft">Compression
+        {s.format !== "PDF" && <label className="flex flex-col gap-1 text-[11px] text-shift-soft">Compression
           <select value={s.compression} onChange={(event) => s.setCompression(event.target.value as typeof s.compression)} className="rounded-[6px] border border-[var(--hairline)] bg-shift-window px-2 py-[6px] text-[13px] text-shift-text">
             {s.compressionChoices.map((choice) => <option key={choice.id} value={choice.id}>{choice.label}</option>)}
           </select>
-        </label>
-        <Button variant="primary" onClick={s.startExport} disabled={!s.canExport || s.saving}>Export {s.selectedBatchCount}</Button>
+        </label>}
+        <Button variant="primary" onClick={s.startExport} disabled={!s.canExport || s.saving}>{s.format === "PDF" ? "Export PDF…" : `Export ${s.selectedBatchCount}`}</Button>
       </div>
     </div>
   );

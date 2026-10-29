@@ -60,7 +60,7 @@ impl ShiftError {
 
     pub fn unsupported_file() -> Self {
         Self::new("unsupported_file", "SHIFT can't read this file.")
-            .hint("SHIFT supports MP4, MOV, WEBM video, MP3, WAV, M4A, AAC audio, and HEIC, HEIF, JPG, PNG, WEBP images.")
+            .hint("SHIFT supports MP4, MOV, WEBM video, MP3, WAV, M4A, AAC audio, and HEIC, HEIF, JPG, PNG, WEBP images, and PDF documents.")
     }
 
     pub fn probe_failed(technical: impl Into<String>) -> Self {

@@ -12,6 +12,7 @@ import type {
   Health,
   JobEvent,
   LocalMedia,
+  JobOutput,
   SavePrompt,
   PostDownloadResult,
   PostMedia,
@@ -55,6 +56,9 @@ export const downloadPostItems = (items: PostMedia[], destinationDir: string, jo
   });
 
 export const analyzeFile = (path: string) => invoke<LocalMedia>("analyze_file", { path });
+export const importPdf = (path: string) => invoke<{ sourceName: string; pages: LocalMedia[] }>("import_pdf", { path });
+export const exportPdf = (sources: string[], destinationPath: string, jobId: string) =>
+  invoke<JobOutput>("export_pdf", { request: { sources, destinationPath, jobId } });
 
 /** The dimensions an aspect choice would produce, or null when unknowable. */
 export const aspectPreview = (

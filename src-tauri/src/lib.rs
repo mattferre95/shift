@@ -19,6 +19,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(JobRegistry::default())
+        .manage(media::pdf::PdfCacheRegistry::default())
         .manage(media::playback::PlaybackRegistry::default())
         .manage(SettingsStore::load())
         .setup(|app| {
@@ -36,6 +37,8 @@ pub fn run() {
             commands::analyze_url,
             commands::download_post_items,
             commands::analyze_file,
+            commands::import_pdf,
+            commands::export_pdf,
             commands::validate_clip,
             commands::aspect_preview,
             commands::preview_source,

@@ -6,16 +6,18 @@ import { ShiftProvider, useShift } from "@/state/shift";
 import { ImageBatchView } from "@/features/input/ImageBatchView";
 import * as ipc from "@/lib/ipc";
 import type { ExportRequest, JobEvent, LocalMedia } from "@/types";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 
 vi.mock("@/state/playback", () => ({ usePlayback: () => ({ info: null, busy: false, error: null, status: null, timings: {}, cancel: vi.fn() }) }));
 vi.mock("@tauri-apps/api/core", () => ({ convertFileSrc: (path: string) => path }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(async () => null) }));
+vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(async () => null), save: vi.fn(async () => null) }));
 vi.mock("@/lib/ipc", () => ({
   defaultOutputDir: vi.fn(async () => "/tmp"),
   health: vi.fn(async () => ({ ffmpeg: true, ffprobe: true, ytdlp: true })),
   onJobEvent: vi.fn(async () => () => {}),
   analyzeFile: vi.fn(),
+  importPdf: vi.fn(),
+  exportPdf: vi.fn(),
   setOutputDir: vi.fn(async () => "/tmp/exports"),
   startExport: vi.fn(),
   cancelJob: vi.fn(async () => true),
@@ -174,4 +176,77 @@ it("cancels the active item and keeps completed outputs", async () => {
   expect(requests).toHaveLength(2);
   expect(result.current.batch?.items.map((item) => item.status)).toEqual(["success", "cancelled", "cancelled"]);
   expect(result.current.batch?.items[0].output?.filename).toBe("one.jpg");
+});
+
+
+it("opens a PDF as an ordered page batch with image outputs", async () => {
+  vi.mocked(ipc.importPdf).mockResolvedValue({ sourceName: "report", pages: [
+    { ...image(1, ["JPG", "PNG", "WEBP"]), path: "/tmp/page-0001.png", name: "report - Page 1.png", ext: "PNG" },
+    { ...image(2, ["JPG", "PNG", "WEBP"]), path: "/tmp/page-0002.png", name: "report - Page 2.png", ext: "PNG" },
+  ] });
+  const { result } = renderHook(() => useShift(), { wrapper });
+  act(() => result.current.acceptPaths(["/tmp/report.pdf"]));
+  await waitFor(() => expect(result.current.screen).toBe("batch"));
+  expect(result.current.batch?.pdfSource).toBe("/tmp/report.pdf");
+  expect(result.current.batch?.items.map((item) => item.media.name)).toEqual(["report - Page 1.png", "report - Page 2.png"]);
+  expect(result.current.format).toBe("PNG");
+  expect(result.current.outputs).not.toContain("PDF");
+});
+
+it("exports selected images as one PDF in source order", async () => {
+  vi.mocked(save).mockResolvedValue("/tmp/exports/photos.pdf");
+  vi.mocked(ipc.exportPdf).mockResolvedValue({ path: "/tmp/exports/photos.pdf", filename: "photos.pdf",
+    sizeBytes: 500, sourceBytes: 2000, remuxed: false, directory: "/tmp/exports" });
+  const { result } = renderHook(() => useShift(), { wrapper });
+  vi.mocked(ipc.analyzeFile).mockImplementation(async (path) => image(Number(path.match(/\d+/)?.[0] ?? 0), ["JPG", "PNG", "PDF"]));
+  act(() => result.current.acceptPaths(["/tmp/IMG_1.HEIC", "/tmp/IMG_2.HEIC", "/tmp/IMG_3.HEIC"]));
+  await waitFor(() => expect(result.current.batch?.items).toHaveLength(3));
+  act(() => result.current.toggleBatchItem(result.current.batch!.items[1].id));
+  act(() => result.current.setFormat("PDF"));
+  act(() => result.current.startExport());
+  await waitFor(() => expect(result.current.screen).toBe("complete"));
+  expect(save).toHaveBeenCalledTimes(1);
+  expect(ipc.exportPdf).toHaveBeenCalledTimes(1);
+  expect(vi.mocked(ipc.exportPdf).mock.calls[0][0]).toEqual(["/tmp/IMG_1.HEIC", "/tmp/IMG_3.HEIC"]);
+  expect(ipc.startExport).not.toHaveBeenCalled();
+  expect(result.current.output?.filename).toBe("photos.pdf");
+});
+
+it("exports one local image as a one-page PDF", async () => {
+  vi.mocked(save).mockResolvedValue("/tmp/exports/portrait.pdf");
+  vi.mocked(ipc.exportPdf).mockResolvedValue({ path: "/tmp/exports/portrait.pdf", filename: "portrait.pdf",
+    sizeBytes: 250, sourceBytes: 1000, remuxed: false, directory: "/tmp/exports" });
+  vi.mocked(ipc.analyzeFile).mockResolvedValue(image(1, ["JPG", "PNG", "PDF"]));
+  const { result } = renderHook(() => useShift(), { wrapper });
+  act(() => result.current.acceptPaths(["/tmp/IMG_1.HEIC"]));
+  await waitFor(() => expect(result.current.screen).toBe("local"));
+  act(() => result.current.setFormat("PDF"));
+  act(() => result.current.startExport());
+  await waitFor(() => expect(result.current.screen).toBe("complete"));
+  expect(ipc.exportPdf).toHaveBeenCalledWith(["/tmp/IMG_1.HEIC"], "/tmp/exports/portrait.pdf", expect.any(String));
+  expect(result.current.output?.filename).toBe("portrait.pdf");
+});
+
+it("keeps original PDF page numbers when exporting a selected page", async () => {
+  vi.mocked(ipc.importPdf).mockResolvedValue({ sourceName: "report", pages: [1, 2, 3].map((n) => ({
+    ...image(n, ["PNG", "JPG"]), path: `/tmp/page-${String(n).padStart(4, "0")}.png`, name: `report - Page ${n}.png`, ext: "PNG",
+  })) });
+  vi.mocked(open).mockResolvedValue("/tmp/exports");
+  let emit!: (event: JobEvent) => void;
+  vi.mocked(ipc.onJobEvent).mockImplementation(async (handler) => { emit = handler; return () => {}; });
+  vi.mocked(ipc.startExport).mockImplementation(async (request) => {
+    queueMicrotask(() => emit({ jobId: "page-job", state: "completed", stageLabel: "Done",
+      stageIndex: 1, stageCount: 1, progress: 1, outputFilename: "report_3.png", actions: [],
+      output: { path: "/tmp/exports/report_3.png", filename: "report_3.png", sizeBytes: 50,
+        remuxed: false, sourceBytes: 1000, directory: "/tmp/exports" }, error: null }));
+    return "page-job";
+  });
+  const { result } = renderHook(() => useShift(), { wrapper });
+  act(() => result.current.acceptPaths(["/tmp/report.pdf"]));
+  await waitFor(() => expect(result.current.batch?.items).toHaveLength(3));
+  act(() => result.current.deselectAllBatch());
+  act(() => result.current.toggleBatchItem(result.current.batch!.items[2].id));
+  act(() => result.current.startExport());
+  await waitFor(() => expect(result.current.screen).toBe("complete"));
+  expect(vi.mocked(ipc.startExport).mock.calls[0][0].batchNaming).toEqual({ base: "report", ordinal: 3 });
 });
