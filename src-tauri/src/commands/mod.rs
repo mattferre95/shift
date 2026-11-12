@@ -16,6 +16,7 @@ use crate::process::{Binary, CancelToken};
 use crate::providers::{self, BrowserSessionMode, DownloadKind, PostMedia, PostMediaType, UrlMedia};
 use crate::settings::SettingsStore;
 use crate::validation;
+use crate::website::{self, WebsiteDownloadRequest, WebsiteDownloadResult, WebsitePage};
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -308,6 +309,43 @@ pub async fn export_pdf(app: AppHandle, request: PdfExportRequest) -> Result<job
     }).await.map_err(|e| ShiftError::new("internal", "SHIFT couldn't create that PDF.").technical(e.to_string()))?;
     app.state::<JobRegistry>().finish(&job_id);
     result
+}
+
+#[tauri::command]
+pub async fn scrape_website(url: String) -> Result<WebsitePage> {
+    tauri::async_runtime::spawn_blocking(move || website::scrape(&url))
+        .await
+        .map_err(|e| ShiftError::fetch_failed(e.to_string()))?
+}
+
+#[tauri::command]
+pub async fn website_image_preview(page_url: String, url: String) -> Result<String> {
+    tauri::async_runtime::spawn_blocking(move || website::thumbnail(&page_url, &url))
+        .await
+        .map_err(|e| ShiftError::fetch_failed(e.to_string()))?
+}
+
+#[derive(Clone, Serialize)]
+pub struct WebsiteDownloadProgress {
+    current: usize,
+    total: usize,
+}
+
+#[tauri::command]
+pub async fn download_website_images(
+    app: AppHandle,
+    request: WebsiteDownloadRequest,
+    progress: tauri::ipc::Channel<WebsiteDownloadProgress>,
+) -> Result<WebsiteDownloadResult> {
+    let job_id = request.job_id.clone();
+    let cancel = app.state::<JobRegistry>().register(&job_id);
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        website::download(request, &cancel, |current, total| {
+            let _ = progress.send(WebsiteDownloadProgress { current, total });
+        })
+    }).await;
+    app.state::<JobRegistry>().finish(&job_id);
+    result.map_err(|e| ShiftError::download_failed(e.to_string()))?
 }
 
 #[tauri::command]

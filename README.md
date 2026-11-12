@@ -19,6 +19,7 @@ SHIFT brings source, preview, timeline, output format and export into one Dashbo
 - **Shape the output.** Change aspect ratio, position a crop, choose Fill or Fit, flip the picture, and keep or remove source sound. The preview and output dimensions show the result before export.
 - **Convert local media.** Work with common video, audio and image inputs; export MP4, MOV, WEBM, GIF, animated WEBP, MP3, M4A, WAV, FLAC, JPG, PNG, WEBP and AVIF where they apply. Local image batches can be converted together. Combine selected images into one PDF, or export PDF pages as separate JPG, PNG, WEBP or AVIF images.
 - **Work with public links.** Analyze supported HTTP(S) media through yt-dlp and download or export available items. Site support can change. Only download media you are authorized or legally permitted to use.
+- **Scrape website images.** Preview images on a public page, select the ones you want, and download them into one folder. Product galleries are grouped by product when the page exposes that information.
 - **Stay local.** File transformations run on your Mac. SHIFT has no account, telemetry or cloud upload. Link analysis and downloads require network access; [URL egress limits](docs/URL_EGRESS.md) are documented separately.
 
 ## Screenshots

@@ -60,7 +60,7 @@ test("Fetch acknowledges immediately, reports native stages, and ignores duplica
   expect(screen.getByRole("status").textContent).toBe("Resolving link…");
   expect((screen.getByRole("button", { name: "Resolving…" }) as HTMLButtonElement).disabled).toBe(true);
   await waitFor(() => expect(ipc.analyzeUrl).toHaveBeenCalledTimes(1));
-  fireEvent.submit(screen.getByRole("form", { name: "Fetch a link" }));
+  fireEvent.submit(screen.getByRole("form", { name: "Open a link" }));
   expect(ipc.analyzeUrl).toHaveBeenCalledTimes(1);
   const requestId = vi.mocked(ipc.analyzeUrl).mock.calls[0][2]!;
   act(() => analysisHandler({ requestId, stage: "fetchingMediaInformation", elapsedMs: 25 }));

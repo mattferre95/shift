@@ -9,6 +9,8 @@ SHIFT brings source, preview, timeline and export controls together in a unified
 - MP4, MOV, WEBM, GIF, WEBP and AVIF exports where applicable, plus audio extraction and conversion.
 - Public-link analysis and downloads through bundled yt-dlp, subject to changing site support and the documented URL egress controls.
 - A trim correction: opening a longer source selects its full duration until you choose a shorter range.
+- Export filenames include a duration suffix only when the selected range shortens the source.
+- Scrape finds images and embedded product galleries on a public page. Select individual images or all of them, then download the originals into a named folder.
 
 ## Download and requirements
 

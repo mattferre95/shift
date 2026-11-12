@@ -14,6 +14,7 @@ import { CompleteState } from "@/features/export/CompleteState";
 import { ErrorState } from "@/features/export/ErrorState";
 import { ProcessingState } from "@/features/jobs/ProcessingState";
 import { DashboardView } from "@/features/dashboard/DashboardView";
+import { WebsiteImages } from "@/features/website/WebsiteImages";
 import { ShiftProvider, useShift } from "@/state/shift";
 import { VIEWS, ViewProvider, useView, type View } from "@/state/view";
 
@@ -47,7 +48,7 @@ function Window() {
   // failed to open never became one.
   const jobSource = jobScreen && (!!localMedia || !!urlMedia) && !(screen === "error" && failedDuring.current === "input");
 
-  const header = !jobScreen && view === "dashboard" ? null : jobSource
+  const header = screen === "website" ? <Header title="Website images" /> : !jobScreen && view === "dashboard" ? null : jobSource
     ? post ? <PostHeader /> : <EditHeader sound={false} />
     : loaded && view === "download" && post && !analyzing
       ? <PostHeader />
@@ -57,7 +58,7 @@ function Window() {
 
   // Modes and the post view use the full workspace; Download and the job
   // screens are a centred column, so a wider window adds margin, not width.
-  const fullWidth = view === "dashboard" || screen === "batch" || (loaded && (view !== "download" || (post && !analyzing)));
+  const fullWidth = screen === "website" || view === "dashboard" || screen === "batch" || (loaded && (view !== "download" || (post && !analyzing)));
 
   return (
     <div className="flex h-full bg-shift-window">
@@ -69,6 +70,7 @@ function Window() {
             {screen === "empty" && (view === "dashboard" ? <DashboardView /> : <Home />)}
             {loaded && <ModeView view={view} />}
             {screen === "batch" && (view === "dashboard" ? <DashboardView /> : <ImageBatchView />)}
+            {screen === "website" && <WebsiteImages />}
             {screen === "processing" && <ProcessingState />}
             {screen === "complete" && <CompleteState />}
             {screen === "error" && <ErrorState during={failedDuring.current} />}
@@ -137,7 +139,7 @@ function useDesktopBehaviour() {
       const target = e.target as HTMLElement | null;
       // Never steal a paste aimed at the IN/OUT fields.
       if (target?.tagName === "INPUT" || target?.tagName === "TEXTAREA") return;
-      if (s.screen === "processing") return;
+      if (s.screen === "processing" || (s.screen === "empty" && !s.analyzing)) return;
       const text = e.clipboardData?.getData("text") ?? "";
       if (/^https?:\/\//i.test(text.trim())) {
         e.preventDefault();

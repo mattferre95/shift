@@ -8,6 +8,7 @@ pub mod process;
 pub mod providers;
 pub mod settings;
 pub mod validation;
+pub mod website;
 
 use jobs::JobRegistry;
 use settings::SettingsStore;
@@ -36,6 +37,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::analyze_url,
             commands::download_post_items,
+            commands::scrape_website,
+            commands::website_image_preview,
+            commands::download_website_images,
             commands::analyze_file,
             commands::import_pdf,
             commands::export_pdf,

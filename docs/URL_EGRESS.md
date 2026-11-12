@@ -7,6 +7,7 @@ network access is therefore constrained at each component that can connect.
 | Component | URL-derived requests | Boundary |
 | --- | --- | --- |
 | Rust URL resolver | HEAD requests and HTTP redirects | Every hop resolves all DNS answers, rejects non-public addresses, and uses curl `--resolve` to pin the checked address. Curl does not follow redirects on its own. |
+| Website image scraping | Public page HTML, redirects, previews and original images | System curl runs in the same Seatbelt profile and checked SOCKS proxy as the downloader. The page is parsed without running scripts. |
 | yt-dlp analysis | Page, extractor, embed, and metadata URLs | The subprocess inherits a macOS Seatbelt profile allowing outbound TCP only to SHIFT's temporary loopback SOCKS proxy. UDP and other direct connections remain denied. The proxy resolves and checks each requested destination and dials the checked `SocketAddr`. |
 | yt-dlp thumbnail and download | Poster URLs, direct media, HLS/DASH manifests and segments | Same sandbox and proxy on every invocation. Native HLS/DASH downloaders are selected so segment requests normally stay in yt-dlp. |
 | yt-dlp child downloader or FFmpeg | Any URL opened by a child | Children inherit the Seatbelt profile. They may use the same checked proxy, or fail closed if they cannot proxy. No unsandboxed retry is used. |

@@ -4,7 +4,7 @@
  * Every call is a named command with structured arguments. Nothing here builds
  * a command line, and there is deliberately no escape hatch that could.
  */
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   ClipCheck,
@@ -54,6 +54,54 @@ export const downloadPostItems = (items: PostMedia[], destinationDir: string, jo
   invoke<PostDownloadResult>("download_post_items", {
     request: { items, destinationDir, jobId, browserSession },
   });
+
+export interface WebsiteImage {
+  url: string;
+  previewUrl: string;
+  label: string;
+  stem: string;
+  group: string | null;
+}
+
+export interface WebsitePage {
+  title: string;
+  url: string;
+  folder: string;
+  images: WebsiteImage[];
+  truncated: boolean;
+}
+
+export interface WebsiteDownloadProgress {
+  current: number;
+  total: number;
+}
+
+export interface WebsiteDownloadResult {
+  folder: string | null;
+  saved: number;
+  failed: { name: string; reason: string }[];
+  cancelled: boolean;
+}
+
+export const scrapeWebsite = (url: string) => invoke<WebsitePage>("scrape_website", { url });
+
+export const websiteImagePreview = (pageUrl: string, url: string) =>
+  invoke<string>("website_image_preview", { pageUrl, url });
+
+export const downloadWebsiteImages = (
+  page: WebsitePage,
+  images: WebsiteImage[],
+  destinationDir: string,
+  jobId: string,
+  onProgress: (message: WebsiteDownloadProgress) => void,
+) => {
+  const progress = new Channel<WebsiteDownloadProgress>();
+  progress.onmessage = onProgress;
+  return invoke<WebsiteDownloadResult>("download_website_images", {
+    request: { pageUrl: page.url, folder: page.folder, images, destinationDir, jobId },
+    progress,
+  });
+};
 
 export const analyzeFile = (path: string) => invoke<LocalMedia>("analyze_file", { path });
 export const importPdf = (path: string) => invoke<{ sourceName: string; pages: LocalMedia[] }>("import_pdf", { path });

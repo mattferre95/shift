@@ -64,7 +64,7 @@ import {
   type UrlMedia,
 } from "@/types";
 
-export type Screen = "empty" | "url" | "local" | "batch" | "processing" | "complete" | "error";
+export type Screen = "empty" | "url" | "local" | "batch" | "website" | "processing" | "complete" | "error";
 
 /**
  * Output chips for a remote source (URL-03).
@@ -95,6 +95,7 @@ interface ShiftState {
   selectedMediaIds: string[];
   localMedia: LocalMedia | null;
   batch: ImageBatch | null;
+  website: { url: string; page: ipc.WebsitePage | null; error: ShiftError | null } | null;
   inputWarning: string | null;
   format: OutputFormat;
   quality: string;
@@ -175,6 +176,7 @@ interface ShiftApi extends ShiftState {
   setCompression: (c: Compression) => void;
   setLoopSize: (l: LoopSize) => void;
   submitUrl: (raw: string) => void;
+  scrapeWebsite: (raw: string) => void;
   openFilePicker: () => void;
   acceptPaths: (paths: string[]) => void;
   setBatchName: (name: string) => void;
@@ -220,6 +222,7 @@ const initial: ShiftState = {
   selectedMediaIds: [],
   localMedia: null,
   batch: null,
+  website: null,
   inputWarning: null,
   format: "MP4",
   quality: "best",
@@ -371,6 +374,17 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
   }, [patch]);
 
   // ---- input --------------------------------------------------------------
+  const scrapeWebsite = useCallback(async (url: string) => {
+    const generation = ++sourceGeneration.current;
+    patch({ screen: "website", website: { url, page: null, error: null } });
+    try {
+      const page = await ipc.scrapeWebsite(url);
+      if (generation === sourceGeneration.current) patch({ website: { url, page, error: null } });
+    } catch (e) {
+      if (generation === sourceGeneration.current) patch({ website: { url, page: null, error: ipc.toShiftError(e) } });
+    }
+  }, [patch]);
+
   const submitUrl = useCallback(
     (raw: string, browserSession: BrowserSessionMode = "none", preserveSettings = false) => {
       const value = raw.trim();
@@ -1115,6 +1129,7 @@ export function ShiftProvider({ children }: { children: ReactNode }) {
     aspectLocked,
     compressionChoices,
     submitUrl,
+    scrapeWebsite,
     openFilePicker,
     acceptPaths,
     setBatchName: (name) => set((prev) => prev.batch ? ({ ...prev, batch: { ...prev.batch, name } }) : prev),

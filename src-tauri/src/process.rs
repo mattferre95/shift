@@ -33,6 +33,8 @@ pub enum Binary {
     /// macOS' own image tool. Part of the OS, so it is never bundled — it is
     /// the reason SHIFT can read HEIC without shipping another decoder.
     Sips,
+    /// macOS' system HTTP client for public webpage images.
+    Curl,
 }
 
 impl Binary {
@@ -42,6 +44,7 @@ impl Binary {
             Binary::Ffprobe => "ffprobe",
             Binary::YtDlp => "yt-dlp",
             Binary::Sips => "sips",
+            Binary::Curl => "curl",
         }
     }
 }
@@ -68,13 +71,12 @@ pub fn resolve(bin: Binary) -> Result<PathBuf> {
     }
     roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("binaries")); // dev checkout
 
-    // sips ships with macOS; there is no bundled copy to look for.
-    if bin == Binary::Sips {
-        let system = PathBuf::from("/usr/bin/sips");
+    if matches!(bin, Binary::Sips | Binary::Curl) {
+        let system = PathBuf::from("/usr/bin").join(name);
         if system.is_file() {
             return Ok(system);
         }
-        return which_on_path("sips").ok_or_else(|| ShiftError::missing_binary("sips"));
+        return which_on_path(name).ok_or_else(|| ShiftError::missing_binary(name));
     }
 
     let relatives: Vec<String> = match bin {
@@ -204,19 +206,31 @@ pub fn run(
     // Seatbelt is inherited by every descendant, including yt-dlp's ffmpeg
     // and any external downloader. Failure to apply it fails the request;
     // there is deliberately no unsandboxed retry.
-    let proxy = if bin == Binary::YtDlp { Some(PublicProxy::start()?) } else { None };
+    let proxy = if matches!(bin, Binary::YtDlp | Binary::Curl) {
+        Some(PublicProxy::start()?)
+    } else {
+        None
+    };
     let profile = proxy.as_ref().map(PublicProxy::profile)
         .unwrap_or_else(|| NO_NETWORK_PROFILE.to_string());
     let mut protected_args = args.to_vec();
     if let Some(proxy) = &proxy {
-        protected_args.splice(0..0, [
-            "--proxy".into(), format!("socks5://127.0.0.1:{}", proxy.port()),
-            // Keep HLS/DASH segment requests in yt-dlp's proxied downloader.
-            // If an extractor still invokes ffmpeg, Seatbelt blocks its direct
-            // network connections instead of silently escaping this boundary.
-            "--downloader".into(), "m3u8:native".into(),
-            "--downloader".into(), "dash:native".into(),
-        ]);
+        if bin == Binary::Curl {
+            // Curl must disable curlrc first. The SOCKS proxy validates and
+            // resolves each destination, including after redirects.
+            protected_args.splice(0..0, [
+                "-q".into(), "--proxy".into(), format!("socks5h://127.0.0.1:{}", proxy.port()),
+            ]);
+        } else {
+            protected_args.splice(0..0, [
+                "--proxy".into(), format!("socks5://127.0.0.1:{}", proxy.port()),
+                // Keep HLS/DASH segment requests in yt-dlp's proxied downloader.
+                // If an extractor still invokes ffmpeg, Seatbelt blocks its direct
+                // network connections instead of silently escaping this boundary.
+                "--downloader".into(), "m3u8:native".into(),
+                "--downloader".into(), "dash:native".into(),
+            ]);
+        }
     }
     let mut cmd = Command::new("/usr/bin/sandbox-exec");
     cmd.arg("-p").arg(&profile).arg(&path).args(&protected_args)

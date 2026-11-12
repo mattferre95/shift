@@ -27,6 +27,9 @@ dirs = "6"
 rand = "0.8"
 libc = "0.2"
 base64 = "0.22"
+dom_query = "0.27"
+infer = "0.19"
+percent-encoding = "2"
 
 [profile.release]
 codegen-units = 1

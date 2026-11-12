@@ -19,6 +19,13 @@ npm run app:dev                   # or: npm run app:build
 
 Sidecars are not committed. `npm run sidecars` is required before the first build.
 
+## Working across checkouts
+
+Use `origin/main` as the shared baseline for new work. Check the current branch
+and commit before editing or building. The Dashboard footer shows the commit
+used to build the running app. Install local builds from that same checkout so
+the app in Applications reflects the changes on GitHub.
+
 ## Conventions
 
 - **The frontend never builds a command.** It submits structured intent to a
@@ -68,6 +75,12 @@ Sidecars are not committed. `npm run sidecars` is required before the first buil
   videos. Preview and conversion follow the active item, while a multi-item
   selection downloads native sources into one folder. Keep provider order and
   per-item cache ownership intact.
+- **Scrape is the public website image workflow.** It reads one page and its
+  embedded image data in `src-tauri/src/website/`. System curl uses the same
+  checked proxy as yt-dlp. Keep previews local to the app and use the product
+  metadata for file and folder names when the page provides it.
+- **A duration suffix means an export was shortened.** A full-length export
+  keeps the source name and any aspect suffix.
 - **Never invent progress.** Report a percentage only when the native layer has
   a real one; otherwise show stage position.
 - **Never overwrite an output by accident.** Automatically named outputs go

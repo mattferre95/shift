@@ -1,4 +1,5 @@
-import { useState, type FormEvent } from "react";
+import type { FormEvent } from "react";
+import { useLinkEntry } from "./useLinkEntry";
 import { Button } from "@/components/Button";
 import { Notice } from "@/components/Notice";
 import { Spinner } from "@/components/Spinner";
@@ -71,15 +72,9 @@ function Entry() {
   );
 }
 
-/**
- * The link field. Submits through `submitUrl`, the same path as ⌘V anywhere in
- * the window. It is not focused on arrival, so that window-wide ⌘V keeps
- * fetching straight away instead of pasting into the field.
- */
 function UrlField() {
   const s = useShift();
-  const [value, setValue] = useState("");
-  const valid = URL_PATTERN.test(value.trim());
+  const { value, setValue, field, valid } = useLinkEntry(s.analyzing);
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
@@ -92,6 +87,7 @@ function UrlField() {
         <LinkIcon />
         <span className="sr-only">Media link</span>
         <input
+          ref={field}
           type="url"
           value={value}
           onChange={(e) => setValue(e.target.value)}
@@ -109,6 +105,9 @@ function UrlField() {
       </label>
       <Button type="submit" variant="primary" disabled={!valid} className="!h-[50px] !rounded-[12px] !px-6">
         Fetch
+      </Button>
+      <Button onClick={() => s.scrapeWebsite(value.trim())} disabled={!valid} className="!h-[50px] !rounded-[12px] !px-5">
+        Scrape
       </Button>
     </form>
   );
