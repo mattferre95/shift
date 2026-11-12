@@ -363,14 +363,13 @@ fn plan_actions(
 }
 
 /// Name the result the way the user would (EXP-02): the source, then what was
-/// done to it — `<source>_<aspect>_<duration>`, e.g. `carti_169_15s`. Only
-/// shape and length are named; compression, sound, loop size and Fill/Fit are
-/// not, and a default never is.
+/// done to it — `<source>_<aspect>_<clip duration>`, e.g. `carti_169_15s`.
+/// Add the aspect for a resize and the duration only for a shortened range.
 fn output_stem(
     request: &ExportRequest,
     source_title: &str,
     clip: Option<ClipRange>,
-    duration: Option<f64>,
+    source_duration: Option<f64>,
 ) -> String {
     if let Some(batch) = &request.batch_naming {
         return format!("{}_{}", filesystem::sanitize_title_stem(&batch.base), batch.ordinal);
@@ -390,12 +389,14 @@ fn output_stem(
         request.format,
         OutputFormat::Jpg | OutputFormat::Png | OutputFormat::Avif | OutputFormat::Pdf
     );
-    if let Some(seconds) = clip
-        .map(|range| range.duration())
-        .or(duration)
-        .filter(|v| timed && v.is_finite() && *v > 0.0)
-    {
-        stem.push_str(&format!("_{}s", clip_seconds(seconds)));
+    // The trim controls round the source endpoint to the nearest millisecond.
+    let source_end = source_duration
+        .filter(|duration| duration.is_finite() && *duration > 0.0)
+        .map(|duration| (duration * 1000.0).round() / 1000.0);
+    if let Some(range) = clip.filter(|range| {
+        timed && (range.start > 0.0 || source_end.map_or(true, |end| range.end < end))
+    }) {
+        stem.push_str(&format!("_{}s", clip_seconds(range.duration())));
     }
     stem
 }
@@ -676,6 +677,8 @@ mod tests {
     fn a_loop_uses_the_same_names() {
         let mut r = request("/v/carti.mov", OutputFormat::Gif);
         r.aspect = ratio(AspectRatio::R1x1);
+        r.source_duration = Some(15.0);
+        assert_eq!(named(&r), "carti_11.gif");
         r.clip = clip("00:05.000", "00:15.000");
         assert_eq!(named(&r), "carti_11_10s.gif");
     }
@@ -780,39 +783,42 @@ mod tests {
         r.source_title = Some("Empty Room Ambient Noise Sound Effect".into());
         r.source_hint = Some("youtube-post.mp4".into());
         r.source_duration = Some(60.0);
-        assert_eq!(named(&r), "Empty_Room_Ambient_Noise_Sound_Effect_60s.mp4");
+        assert_eq!(named(&r), "Empty_Room_Ambient_Noise_Sound_Effect.mp4");
 
         r.format = OutputFormat::Mp3;
-        assert_eq!(named(&r), "Empty_Room_Ambient_Noise_Sound_Effect_60s.mp3");
+        assert_eq!(named(&r), "Empty_Room_Ambient_Noise_Sound_Effect.mp3");
         r.format = OutputFormat::Mp4;
         r.aspect = ratio(AspectRatio::R9x16);
-        assert_eq!(named(&r), "Empty_Room_Ambient_Noise_Sound_Effect_916_60s.mp4");
+        assert_eq!(named(&r), "Empty_Room_Ambient_Noise_Sound_Effect_916.mp4");
         r.source_duration = Some(300.0);
         r.clip = clip("01:00.000", "01:15.000");
         assert_eq!(named(&r), "Empty_Room_Ambient_Noise_Sound_Effect_916_15s.mp4");
     }
 
     #[test]
-    fn full_local_video_and_audio_use_known_duration() {
+    fn full_local_video_and_audio_skip_the_duration_suffix() {
         let mut r = request("/v/carti.mov", OutputFormat::Mp4);
         r.source_duration = Some(120.0);
-        assert_eq!(named(&r), "carti_120s.mp4");
-        r.source_duration = Some(90.0);
-        assert_eq!(named(&r), "carti_90s.mp4");
-        r.source_duration = Some(125.0);
-        assert_eq!(named(&r), "carti_125s.mp4");
-        r.source_duration = Some(0.2);
-        assert_eq!(named(&r), "carti_1s.mp4");
-        r.clip = clip("00:20.000", "00:35.000");
-        assert_eq!(named(&r), "carti_15s.mp4");
-        r.clip = None;
+        assert_eq!(named(&r), "carti.mp4");
         r.format = OutputFormat::Mp3;
-        r.source_duration = Some(60.0);
         r.aspect = ratio(AspectRatio::R9x16);
-        assert_eq!(named(&r), "carti_60s.mp3");
-        r.input = InputSpec::Local { path: "/v/ambient.wav".into() };
+        assert_eq!(named(&r), "carti.mp3");
+        let mut r = request("/v/ambient.wav", OutputFormat::Mp3);
         r.source_duration = Some(180.0);
-        assert_eq!(named(&r), "ambient_180s.mp3");
+        assert_eq!(named(&r), "ambient.mp3");
+    }
+
+    #[test]
+    fn a_clip_spanning_the_full_source_skips_the_duration_suffix() {
+        let mut r = request("/v/carti.mov", OutputFormat::Mp4);
+        r.source_duration = Some(59.9996);
+        r.clip = clip("00:00.000", "01:00.000");
+        assert_eq!(named(&r), "carti.mp4");
+
+        r.clip = clip("00:00.000", "00:59.999");
+        assert_eq!(named(&r), "carti_60s.mp4");
+        r.clip = clip("00:05.000", "01:00.000");
+        assert_eq!(named(&r), "carti_55s.mp4");
     }
 
     #[test]
@@ -836,12 +842,12 @@ mod tests {
         };
         r.source_duration = Some(60.0);
         r.source_title = Some("Empty Room: Ambient / Noise | Sound Effect!".into());
-        assert_eq!(named(&r), "Empty_Room_Ambient_Noise_Sound_Effect_60s.mp4");
+        assert_eq!(named(&r), "Empty_Room_Ambient_Noise_Sound_Effect.mp4");
         r.source_title = Some("YouTube post".into());
         r.source_hint = Some("youtube-post.mp4".into());
-        assert_eq!(named(&r), "8m91_gu_x8U_60s.mp4");
+        assert_eq!(named(&r), "8m91_gu_x8U.mp4");
         r.source_hint = Some("A useful caption.mp4".into());
-        assert_eq!(named(&r), "A_useful_caption_60s.mp4");
+        assert_eq!(named(&r), "A_useful_caption.mp4");
     }
 }
 
